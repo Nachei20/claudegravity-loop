@@ -6,6 +6,8 @@
   "license": "Apache-2.0",
   "skills": {
     "claudegravity-loop": "./skills/claudegravity-loop/SKILL.md",
-    "claudegravity-route": "./skills/claudegravity-route/SKILL.md"
+    "claudegravity-route": "./skills/claudegravity-route/SKILL.md",
+    "antigravity-review": "./skills/antigravity-review/SKILL.md",
+    "antigravity-build": "./skills/antigravity-build/SKILL.md"
   }
 }

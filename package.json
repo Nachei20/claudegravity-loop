@@ -5,8 +5,12 @@
   "type": "module",
   "author": "Nacho",
   "license": "Apache-2.0",
+  "bin": {
+    "claudegravity": "scripts/runner.mjs"
+  },
   "scripts": {
-    "test": "node scripts/validate.mjs"
+    "test": "node scripts/validate.mjs",
+    "preflight": "node scripts/runner.mjs preflight"
   },
   "keywords": [
     "claude-code",

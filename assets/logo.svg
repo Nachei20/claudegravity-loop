@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 200" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="50%" stop-color="#1e1b4b" />
+      <stop offset="100%" stop-color="#090d16" />
+    </linearGradient>
+    <linearGradient id="claudeGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#d97706" />
+      <stop offset="100%" stop-color="#ea580c" />
+    </linearGradient>
+    <linearGradient id="geminiGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#818cf8" />
+    </linearGradient>
+    <linearGradient id="loopGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f59e0b" />
+      <stop offset="50%" stop-color="#a855f7" />
+      <stop offset="100%" stop-color="#38bdf8" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="800" height="200" rx="16" fill="url(#bgGrad)" />
+  <rect width="798" height="198" x="1" y="1" rx="15" fill="none" stroke="#334155" stroke-width="1.5" stroke-opacity="0.6" />
+
+  <!-- Dual Loop Symbol -->
+  <g transform="translate(100, 100)">
+    <!-- Infinity / Loop path -->
+    <path d="M -50,0 C -50,-28 -20,-28 0,0 C 20,28 50,28 50,0 C 50,-28 20,-28 0,0 C -20,28 -50,28 -50,0 Z" 
+          fill="none" stroke="url(#loopGrad)" stroke-width="7" stroke-linecap="round" filter="url(#glow)" />
+    <!-- Antigravity core orbital -->
+    <circle cx="35" cy="0" r="8" fill="#38bdf8" filter="url(#glow)" />
+    <!-- Claude core orbital -->
+    <circle cx="-35" cy="0" r="8" fill="#f59e0b" filter="url(#glow)" />
+    <!-- Cross sparkle -->
+    <circle cx="0" cy="0" r="4" fill="#ffffff" />
+  </g>
+
+  <!-- Brand Typography -->
+  <text x="210" y="95" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-weight="900" font-size="44" letter-spacing="-0.5">
+    <tspan fill="url(#claudeGrad)">CLAUDE</tspan><tspan fill="url(#geminiGrad)">GRAVITY</tspan>
+  </text>
+  
+  <text x="590" y="95" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-weight="300" font-size="44" fill="#94a3b8" letter-spacing="4">
+    LOOP
+  </text>
+
+  <!-- Subtitle -->
+  <text x="212" y="132" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-weight="500" font-size="16" fill="#cbd5e1" letter-spacing="0.5">
+    Cross-Model Plan Hardening: Anthropic Claude <tspan fill="#f59e0b">⚔️</tspan> Google Antigravity
+  </text>
+</svg>

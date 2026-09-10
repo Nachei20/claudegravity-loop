@@ -1,11 +1,15 @@
-# 🌀 Claudegravity Loop
+<div align="center">
 
-> **Cross-Model Plan Hardening & Collaborative Engineering between Anthropic Claude and Google Antigravity (Gemini).**
+<img src="assets/logo.svg" alt="Claudegravity Loop" width="100%">
+
+### Cross-Model Plan Hardening & Collaborative Engineering: Anthropic Claude ⚔️ Google Antigravity (Gemini)
 
 [![CI](https://github.com/Nachei20/claudegravity-loop/actions/workflows/ci.yml/badge.svg)](https://github.com/Nachei20/claudegravity-loop/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-Plugin-purple.svg)](https://claude.ai)
 [![Google Antigravity](https://img.shields.io/badge/Google-Antigravity-orange.svg)](https://antigravity.google)
+
+</div>
 
 ---
 
@@ -21,10 +25,14 @@
 
 ## Available Skills
 
+This repository includes 4 specialized skills for different phases of cross-model collaboration:
+
 | Skill | Description | Use Case |
 |:---|:---|:---|
 | **[`claudegravity-loop`](skills/claudegravity-loop/SKILL.md)** | Full 4-phase collaborative plan hardening, adversarial review, and cross-construction. | High-stakes architecture, migrations, schema/auth, concurrency. |
 | **[`claudegravity-route`](skills/claudegravity-route/SKILL.md)** | Fast model selector and triage decision matrix. | Deciding whether a task needs Claude, Antigravity, or the full loop. |
+| **[`antigravity-review`](skills/antigravity-review/SKILL.md)** | Direct adversarial plan review using Google Antigravity. | You already have a `PLAN.md` and want Antigravity to attack it. |
+| **[`antigravity-build`](skills/antigravity-build/SKILL.md)** | Delegated implementation to Antigravity with independent Claude audit. | Antigravity writes the patch; Claude audits diff and tests. |
 
 ---
 
@@ -84,7 +92,21 @@ flowchart TD
 
 ---
 
-## Installation & Usage
+## CLI Runner (`claudegravity`)
+
+Claudegravity Loop includes a zero-dependency native JavaScript CLI adapter to automate review rounds and preflight diagnostics:
+
+```bash
+# Check installed CLIs and bridge readiness
+node scripts/runner.mjs preflight
+
+# Run an automated adversarial review against PLAN.md
+node scripts/runner.mjs review --plan PLAN.md --rounds 5
+```
+
+---
+
+## Installation & Setup
 
 ### Method A: Install as a Claude Code Plugin
 In Claude Code, add the marketplace repository and install:
@@ -98,11 +120,11 @@ Clone or symlink into your global agent skills directory:
 ```bash
 git clone https://github.com/Nachei20/claudegravity-loop.git ~/.agents/skills/claudegravity-loop
 ```
-Both **Claude Code** and **Google Antigravity CLI** will automatically discover and load the skill.
+Both **Claude Code** and **Google Antigravity CLI** will automatically discover and load the skills.
 
 ---
 
-## Document Formats
+## Document Templates
 * **[`ADR-FORMAT.md`](skills/claudegravity-loop/ADR-FORMAT.md)**: Standard template for recording Architectural Decision Records converged during the loop.
 * **[`CONTEXT-FORMAT.md`](skills/claudegravity-loop/CONTEXT-FORMAT.md)**: Specification for brownfield context and sourced assumptions ledgers.
 
