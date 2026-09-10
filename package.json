@@ -1,0 +1,23 @@
+{
+  "name": "claudegravity-loop",
+  "version": "1.0.0",
+  "description": "Cross-model plan hardening and collaborative engineering between Anthropic Claude and Google Antigravity (Gemini).",
+  "type": "module",
+  "author": "Nacho",
+  "license": "Apache-2.0",
+  "scripts": {
+    "test": "node scripts/validate.mjs"
+  },
+  "keywords": [
+    "claude-code",
+    "antigravity",
+    "gemini",
+    "cross-model",
+    "ai-agent",
+    "adversarial-review",
+    "software-engineering"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

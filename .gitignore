@@ -1,0 +1,8 @@
+node_modules/
+.agy-jobs/
+.DS_Store
+Thumbs.db
+*.log
+.env
+.env.*
+!.env.example

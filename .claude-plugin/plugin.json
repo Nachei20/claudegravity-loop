@@ -1,0 +1,11 @@
+{
+  "name": "claudegravity-loop",
+  "version": "1.0.0",
+  "description": "Cross-model plan hardening and collaborative engineering between Anthropic Claude and Google Antigravity (Gemini).",
+  "author": "Nacho",
+  "license": "Apache-2.0",
+  "skills": {
+    "claudegravity-loop": "./skills/claudegravity-loop/SKILL.md",
+    "claudegravity-route": "./skills/claudegravity-route/SKILL.md"
+  }
+}
