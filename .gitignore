@@ -6,3 +6,11 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# Local Claudegravity Loop cycle artifacts (plan, benchmarks, audits, logs)
+/PLAN.md
+/PLAN-REVIEW-LOG.md
+/BENCHMARK_REPORT.md
+/Audit-*.md
+*.pem
+/log-*.txt

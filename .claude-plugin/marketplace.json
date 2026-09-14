@@ -1,9 +1,13 @@
 {
   "name": "claudegravity-loop",
+  "description": "Cross-model plan hardening and collaborative engineering between Anthropic Claude and Google Antigravity (Gemini).",
+  "owner": {
+    "name": "Nacho"
+  },
   "plugins": [
     {
       "name": "claudegravity-loop",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "source": "./",
       "description": "Cross-model plan hardening and collaborative engineering between Anthropic Claude and Google Antigravity (Gemini)."
     }

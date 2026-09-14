@@ -92,17 +92,49 @@ flowchart TD
 
 ---
 
-## CLI Runner (`claudegravity`)
+## CLI Runner (`claudegravity` v1.1.0)
 
-Claudegravity Loop includes a zero-dependency native JavaScript CLI adapter to automate review rounds and preflight diagnostics:
+Claudegravity Loop includes a zero-dependency native JavaScript CLI adapter to automate review rounds, preflight diagnostics, and empirical benchmarks:
 
 ```bash
-# Check installed CLIs and bridge readiness
+# Check installed CLIs, bridge readiness, and platform invariants
 node scripts/runner.mjs preflight
 
-# Run an automated adversarial review against PLAN.md
-node scripts/runner.mjs review --plan PLAN.md --rounds 5
+# Run an automated adversarial review with streaming stdin, pre-flight linter, and bounded fallback
+node scripts/runner.mjs review --plan PLAN.md --rounds 5 --auto-fallback
+
+# Optional flags:
+#   --model <name>       Reviewer model override (e.g., 'sonnet', 'opus')
+#   --auto-fallback      Automatic 1-hop fallback on CBRN/policy/rate limits
+#   --insecure-tls       Opt-in TLS bypass for corporate/local proxies (Warning logged)
+#   --track <type>       Phase 3 track: 'code' (worktrees) or 'artifact' (render/extract)
+#   --timeout <ms>       Round timeout with clean process tree kill (default: 120000)
+
+# Run the empirical benchmark suite (5/5 passing benchmarks)
+npm run benchmark
 ```
+
+---
+
+## Benchmark Suite (`scripts/benchmark.mjs`)
+
+Empirically validates the performance, stability, and security gains:
+
+| Category | Benchmark | Baseline (v1.0) | Optimized (v1.1) | Status |
+|:---|:---|:---|:---|:---:|
+| **STABILITY** | Win32 Argv Boundary Elimination | Fails above 32,767 chars (~32 KB) | Stdin stream scales up to 100 KB+ | ✅ PASS |
+| **SECURITY** | Scoped TLS Validation Invariant | Unconditional global bypass | Default-secure, opt-in child flag | ✅ PASS |
+| **RESILIENCE** | Deterministic 1-Hop Model Fallback | Unbounded retries or crashes | 1-hop failover on verified signals | ✅ PASS |
+| **EFFICIENCY** | Pre-flight Consistency Linter | Wasting 5–7 API rounds on math bugs | Sub-millisecond arithmetic intercept | ✅ PASS |
+| **TOKENOMICS** | Context Overhead Reduction | Raw XML/blob dumps flooding window | 83.3%–85%+ token reduction via extraction | ✅ PASS |
+
+### Runner Exit Codes
+* `0`: **APPROVED** — Plan passed cross-model review with `VERDICT: APPROVED`.
+* `2`: **REVISE** — Reviewer identified architectural findings with `VERDICT: REVISE`. Arbitrate in `PLAN-REVIEW-LOG.md`.
+* `4`: **LINTER ERROR** — Preflight code-fence balance, unit budget, or arithmetic inconsistency in `PLAN.md`.
+* `5`: **BRIDGE ERROR** — Reviewer invocation failure, execution error, or missing verdict tag (never confused with REVISE).
+* `124`: **TIMEOUT** — Review execution exceeded `--timeout` limit (clean process tree termination).
+* `130`: **INTERRUPTED** — Review cancelled by `SIGINT` (Ctrl+C).
 
 ---
 

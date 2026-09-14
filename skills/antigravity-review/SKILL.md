@@ -29,9 +29,13 @@ Confirm Google Antigravity CLI (`agy`) is reachable:
 Ensure the plan is written in `PLAN.md`. Initialize `PLAN-REVIEW-LOG.md` if not already present.
 
 ### 3. Send to Antigravity (Headless Read-Only Mode)
-Execute:
+Execute using the native runner or direct CLI:
 ```bash
-agy -p "You are an adversarial reviewer for an implementation plan. Your job is to find flaws, not to validate or flatter. Read the frozen plan below. Identify concrete flaws: security vulnerabilities, race conditions, edge cases, schema conflicts, or hidden assumptions. For each flaw, provide a specific technical fix. End your response with EXACTLY one of: VERDICT: APPROVED or VERDICT: REVISE.
+# Via native runner with pre-flight linter:
+node "${CLAUDE_PLUGIN_ROOT:-.}/scripts/runner.mjs" review --plan PLAN.md --host claude --auto-fallback
+
+# Or direct CLI call:
+agy -p "You are an adversarial reviewer for an implementation plan under the Claudegravity Loop protocol. Your job is to find flaws, not to validate or flatter. Adopt a rigorous, critical stance (Anti-Sycophancy). Assume the role of a Principal Systems Architect under pressure of production failure: identify concrete flaws: security vulnerabilities, race conditions, edge cases, schema conflicts, or hidden assumptions. For each flaw, provide a specific technical fix. End your response with EXACTLY one of: VERDICT: APPROVED or VERDICT: REVISE.
 
 === PLAN.md ===
 $(cat PLAN.md)
@@ -39,7 +43,7 @@ $(cat PLAN.md)
 ```
 
 > [!IMPORTANT]
-> The plan must be **inlined into the prompt**. In headless mode, tool permission prompts are auto-denied, so directing `agy` to read from the filesystem without inlining will yield empty results.
+> The plan must be **inlined into the prompt** (or streamed via `stdin` using `node scripts/runner.mjs`). In headless mode, tool permission prompts are auto-denied, so directing `agy` to read from the filesystem without inlining will yield empty results.
 
 ### 4. Arbitrate Findings
 1. For every finding returned by Antigravity:

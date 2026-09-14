@@ -120,7 +120,7 @@ flowchart TD
 
 ---
 
-### Phase 1 — INTERROGATE
+### Phase 1 — INTERROGATE (Grill-Me Protocol)
 1. **Decision Map**:
    * **Load-Bearing (Structural)**: Schema migrations, public API contracts, concurrency design, auth models. Asked **strictly one at a time**:
      > **Q<n>: <Question>**  
@@ -129,29 +129,45 @@ flowchart TD
      > **What breaks if we guess wrong:** <Concrete failure scenario>  
    * **Cosmetic**: Names, file layouts, internal helpers. Presented in a single batch with defaults.
    * **Escape Hatch**: Always provide an option to *"Aceptar todas las recomendaciones restantes"*.
-2. **Freeze `PLAN.md`**: Freeze goal, approach, tradeoffs, boundaries, assumptions, PROOF_CMD, and non-goals. Initialize `PLAN-REVIEW-LOG.md`.
+2. **Pre-flight Consistency Linter**:
+   Before sending to the rival, verify mathematical budgets (column heights, character-per-line budgets) and code fence closures (`node scripts/runner.mjs preflight`).
+3. **Freeze `PLAN.md`**: Freeze goal, approach, tradeoffs, boundaries, assumptions, PROOF_CMD, and non-goals. Initialize `PLAN-REVIEW-LOG.md`.
 
 ---
 
-### Phase 2 — REVIEW (Adversarial Attack)
+### Phase 2 — REVIEW (Adversarial Attack & Pressure Framing)
 
-#### Calling the Rival CLI:
+#### Calling the Rival CLI (via Hardened Runner):
+```bash
+# Automated runner with streaming stdin, preflight linter, and bounded fallback
+node "${CLAUDE_PLUGIN_ROOT:-.}/scripts/runner.mjs" review --plan PLAN.md --host claude --rounds 5 --auto-fallback
+# If host is Antigravity:
+node "${CLAUDE_PLUGIN_ROOT:-.}/scripts/runner.mjs" review --plan PLAN.md --host antigravity --rounds 5 --auto-fallback
+```
+
 * **When Host is Claude Code** $\rightarrow$ Calls Antigravity:
   ```bash
   agy -p "<adversarial prompt with inlined PLAN.md>" --mode plan
   ```
 * **When Host is Antigravity** $\rightarrow$ Calls Claude Code:
   ```bash
-  claude -p "<adversarial prompt with inlined PLAN.md>"
+  claude --model sonnet -p "<adversarial prompt with inlined PLAN.md>"
+  # Or --model opus for deep architectural/concurrency tasks
   ```
 
-#### Adversarial Prompt Template:
+#### Model Selection Matrix (Claude Reviewer):
+* **Claude Opus 5**: Maximum reasoning depth for high-stakes distributed architecture, subtle race conditions, cryptography, and complex security audits.
+* **Claude Sonnet 5**: Fast turnaround (~3x speed), surgical diff inspection, and recommended for biological, medical, or chemical domains to avoid CBRN classifier false positives.
+
+#### Adversarial Prompt Template (Anti-Sycophancy & Pressure Framing):
 ```text
-You are an adversarial reviewer for an implementation plan. Your job is to find flaws, not to validate or flatter.
-Read the frozen PLAN.md below. Identify concrete flaws: security holes, race conditions, missing edge cases,
-schema conflicts, hidden assumptions, or overengineering. For each flaw, provide a specific technical fix.
-Do not restate the plan. Do not praise it.
-End your response with EXACTLY one of:
+You are an adversarial reviewer for an implementation plan under the Claudegravity Loop protocol.
+You act as a Lead Architect & Security Auditor operating under production incident pressure.
+Your job is to find concrete technical flaws, vulnerabilities, race conditions, edge cases, schema conflicts, missing error handling, or hidden assumptions.
+Adopt a rigorous, critical stance (Anti-Sycophancy). Do not validate, praise, flatter, or restate the plan.
+For each flaw, identify the exact component and provide a concrete, specific technical fix.
+
+Read the frozen PLAN.md below. End your response with EXACTLY one of:
 VERDICT: APPROVED
 or
 VERDICT: REVISE
@@ -165,10 +181,21 @@ VERDICT: REVISE
 
 ---
 
-### Phase 3 — BUILD (Cross-Construction & Independent Proof)
-* **Rule**: The model that writes code never audits its own diff.
-* The auditor reads the full `git diff` against `PLAN.md` and verifies `PROOF_CMD`.
-* Human gives final sign-off before committing.
+### Phase 3 — BUILD (Dual-Track Construction & Independent Proof)
+
+* **The Core Rule**: The model that writes code/artifacts never audits its own work.
+
+#### Track A: Codebase & Software (`--track code`)
+1. **Git Worktree Isolation**: The builder works in an isolated, ephemeral worktree (`git worktree add -b feat/<branch> ../task-<hash> main`) with short flat paths to prevent Windows `MAX_PATH` overflow.
+2. **Cold Diff Inspection**: The auditor inspects `git diff main...feat/<branch>` line-by-line against the frozen `PLAN.md`.
+3. **Independent Test Execution**: The auditor runs `PROOF_CMD` independently.
+4. **Cleanup Guarantee**: The worktree is cleaned up in a `finally` block (`git worktree remove --force`) followed by `git worktree prune`.
+
+#### Track B: Structured & Visual Artifacts (`--track artifact`)
+1. **Full Structured Extraction**: Extract 100% of shapes, dimensions, texts, and coordinates to structured JSON. Prohibit blind string slicing (`[:100]`) on verifiable identifiers; use paginated chunking if payload exceeds 100 KB.
+2. **Primary Source Reconciliation**: Verify claims against primary underlying source files (e.g. inspecting raw XML within docx/pptx archives).
+3. **Visual Render Validation**: Render high-resolution raster images (via PowerPoint COM, Playwright, or `pdftoppm`) to visually audit layout, overlap, and aesthetic hierarchy. Degrade to structural extraction if no renderer is installed.
+4. **Independent Audit Verdict**: The non-builder model evaluates the extracted data and render against `PLAN.md` and issues `FINAL AUDIT: PASSED` or `FINAL AUDIT: DEFECTS FOUND`.
 
 ---
 

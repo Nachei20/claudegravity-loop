@@ -27,12 +27,16 @@ A specialized entry point for delegating coding tasks to **Google Antigravity**,
 
 ## Execution Protocol
 
-### 1. Preflight
+### 1. Preflight & Worktree Isolation
 1. Verify working directory is clean: `git status --short`.
 2. Confirm `PROOF_CMD` exists and is documented in `PLAN.md`.
+3. **Git Worktree Isolation**: Create an isolated, ephemeral worktree to protect the parent workspace:
+   ```bash
+   git worktree add ../build-task-<hash> -b feat/task-<hash>
+   ```
 
 ### 2. Delegate Construction to Antigravity
-Invoke Antigravity with tool execution permissions to implement the spec:
+Invoke Antigravity with tool execution permissions to implement the spec inside the worktree:
 ```bash
 agy -p "Implement the changes specified in PLAN.md step-by-step. Keep changes strictly bounded to the plan. Do not add unrequested refactors. Run the project tests when finished."
 ```
