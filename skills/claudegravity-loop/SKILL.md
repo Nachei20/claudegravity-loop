@@ -140,9 +140,9 @@ flowchart TD
 #### Calling the Rival CLI (via Hardened Runner):
 ```bash
 # Automated runner with streaming stdin, preflight linter, and bounded fallback
-node "${CLAUDE_PLUGIN_ROOT:-.}/scripts/runner.mjs" review --plan PLAN.md --host claude --rounds 5 --auto-fallback
+node "${CLAUDE_PLUGIN_ROOT:-.}/scripts/runner.mjs" review --plan PLAN.md --host claude --auto-fallback
 # If host is Antigravity:
-node "${CLAUDE_PLUGIN_ROOT:-.}/scripts/runner.mjs" review --plan PLAN.md --host antigravity --rounds 5 --auto-fallback
+node "${CLAUDE_PLUGIN_ROOT:-.}/scripts/runner.mjs" review --plan PLAN.md --host antigravity --auto-fallback
 ```
 
 * **When Host is Claude Code** $\rightarrow$ Calls Antigravity:

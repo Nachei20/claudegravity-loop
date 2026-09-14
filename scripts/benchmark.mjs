@@ -196,6 +196,7 @@ async function runBenchmark2() {
   let defaultRejected = false;
   let caseScrubbingWorked = false;
   let optInAllowed = false;
+  let cmdInjectionImmune = false;
   const initialParentEnv = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
 
   try {
@@ -301,6 +302,32 @@ async function runBenchmark2() {
             });
           });
 
+          // 4. Command Injection & Windows Batch Shim Proactive Rejection (Bloqueante 1)
+          const shimExt = process.platform === 'win32' ? '.cmd' : '.sh';
+          const fakeShim = join(tmpDir, `fakecli${shimExt}`);
+          const markerFile = join(tmpDir, 'INJECTED.txt');
+          if (process.platform === 'win32') {
+            writeFileSync(fakeShim, '@echo OFF\r\necho ARGS=[%*]\r\n');
+          } else {
+            writeFileSync(fakeShim, '#!/bin/sh\necho ARGS="$@"\n', { mode: 0o755 });
+          }
+
+          const injectionPayload = `plan text & echo pwned > "${markerFile}"`;
+          const shimRes = await executeReviewerAsync({
+            bin: fakeShim,
+            args: [],
+            prompt: injectionPayload,
+            stdin: false,
+            timeout: 5000,
+          });
+
+          // In Windows, .cmd/.bat is proactively blocked (status 1, stderr warns) and marker file is never created
+          const markerNeverCreated = !existsSync(markerFile);
+          const batchShimRejected = process.platform === 'win32'
+            ? (shimRes.status !== 0 && typeof shimRes.stderr === 'string' && shimRes.stderr.includes('Windows batch shims'))
+            : true;
+          cmdInjectionImmune = markerNeverCreated && batchShimRejected;
+
           server.close(() => resolveSuite());
         } catch (err) {
           server.close(() => rejectSuite(err));
@@ -313,16 +340,16 @@ async function runBenchmark2() {
   }
 
   const parentEnvUnpolluted = (process.env.NODE_TLS_REJECT_UNAUTHORIZED === initialParentEnv);
-  const passed = defaultRejected && caseScrubbingWorked && optInAllowed && parentEnvUnpolluted;
+  const passed = defaultRejected && caseScrubbingWorked && optInAllowed && parentEnvUnpolluted && cmdInjectionImmune;
 
   recordResult({
     name: 'Scoped TLS Invariant & Case-Insensitive Env Scrubbing (buildChildEnv)',
     category: 'SECURITY',
     passed,
-    metric: `Default Reject: ${defaultRejected ? 'YES' : 'NO'} | Casing Scrub (D7): ${caseScrubbingWorked ? 'YES' : 'NO'} | Opt-in Success: ${optInAllowed ? 'YES' : 'NO'} | Parent Env Pure: ${parentEnvUnpolluted ? 'YES' : 'NO'}`,
-    baseline: 'Unconditional global TLS bypass or casing leak (node_tls_reject_unauthorized)',
-    target: 'Default-secure TLS with case-insensitive scrubbing and child-only opt-in (--insecure-tls)',
-    details: 'Verified real buildChildEnv against ambient casing variations (M1) and unconditional bypass (M2).',
+    metric: `Default Reject: ${defaultRejected ? 'YES' : 'NO'} | Casing Scrub (D7): ${caseScrubbingWorked ? 'YES' : 'NO'} | Opt-in Success: ${optInAllowed ? 'YES' : 'NO'} | Injection Immune: ${cmdInjectionImmune ? 'YES' : 'NO'} | Parent Env Pure: ${parentEnvUnpolluted ? 'YES' : 'NO'}`,
+    baseline: 'Unconditional global TLS bypass, casing leak, or cmd.exe shell injection vulnerability',
+    target: 'Default-secure TLS, case-insensitive scrubbing, and complete cmd.exe shell injection elimination',
+    details: 'Verified real buildChildEnv against casing variations (M1), bypass (M2), and batch shim injection immunity.',
   });
 }
 
@@ -332,19 +359,23 @@ async function runBenchmark2() {
 async function runBenchmark3() {
   console.log('\n📊 Running Benchmark 3: Provider-Aware Fallback, Process Kill & Verdict Parsing (D1, D2, D5)...');
 
-  // Test 3A: Strict verdict parsing (D1 & dedicated bridge code 5 check)
+  // Test 3A: Strict verdict parsing (D1, dedicated bridge code 5, and bold markdown check)
   const v1 = parseVerdict('...cannot receive VERDICT: APPROVED until resolved.\nVERDICT: REVISE', 0);
   const v2 = parseVerdict('VERDICT: APPROVED', 1);
   const v3 = parseVerdict('VERDICT: APPROVED', 0);
   const v4 = parseVerdict('Review completed without verdict tag', 0);
   const v5 = parseVerdict('VERDICT: REVISE', 2); // Non-zero status treated as ERROR/5, never confusing with REVISE
   const v6 = parseVerdict('', 124, true); // Timeout treated as code 124
+  const vBoldRevise = parseVerdict('Summary of findings...\n\n**VERDICT: REVISE**', 0);
+  const vBoldApprove = parseVerdict('Plan meets all criteria.\n\n**VERDICT: APPROVED**', 0);
   const verdictStrict = (v1.verdict === 'REVISE' && v1.code === 2) &&
                         (v2.verdict === 'ERROR' && v2.code === 5) &&
                         (v3.verdict === 'APPROVED' && v3.code === 0) &&
                         (v4.code === 5) &&
                         (v5.code === 5) &&
-                        (v6.code === 124);
+                        (v6.code === 124) &&
+                        (vBoldRevise.verdict === 'REVISE' && vBoldRevise.code === 2) &&
+                        (vBoldApprove.verdict === 'APPROVED' && vBoldApprove.code === 0);
 
   // Test 3B: Real decideFallback invocation (M4 check)
   // Attempt 1: CBRN signal triggers fallback to Sonnet
@@ -428,25 +459,32 @@ async function runBenchmark3() {
 async function runBenchmark4() {
   console.log('\n📊 Running Benchmark 4: Pre-flight Consistency Linter (D4 Comprehensive)...');
 
-  // 4A: Multi-operand equation: 30 + 40 + 20 = 90 (valid) vs = 100 (invalid) & subtraction
-  const lintValidAdd = runPreflightLinter('Total: 30 + 40 + 20 = 90\nRemaining: 100 - 30 - 20 = 50');
-  const lintInvalidAdd = runPreflightLinter('Total: 30 + 40 + 20 = 100');
-  const multiOperandOk = lintValidAdd.ok && !lintInvalidAdd.ok;
+  // 4A: Exact 11-case test matrix specified by empirical re-audit
+  const validCases = [
+    'Width: 2 x 12 cm + 1 cm = 25 cm',
+    'Ancho: 3 × 20 cm + 2 cm = 62 cm',
+    'Rows: 1,200 + 300 = 1,500',
+    'Alto: 1,5 cm + 2,5 cm = 4 cm',
+    'Gap: 1.5cm - 0.5cm = 1.0cm',
+    'Total: 4 * 5 + 2 = 22',
+    'Total: (10 + 5) * 2 = 30',
+  ];
+  const invalidCases = [
+    'Card 1 (24.0cm) + gap (1.5cm) + Card 2 (16.5cm) + gap (1.5cm) + Card 3 (40.5cm) = 95.0 cm',
+    'Max tokens: 30 + 40 + 20 = 100',
+    'Columns: 30% + 30% = 70%',
+    'Total: 30 + 40 + 20 = 100',
+  ];
 
-  // 4B: Labeled budget equation with decimal comma, percentage, and non-linear skip
-  const validBudget = 'Card 1 (24,0cm) + gap (1,5cm) + Card 2 (16,5cm) = 42,0 cm\nScale: 1.5cm - 0.5cm = 1.0cm\nNon-linear: 4 * 5 + 2 = 22 and (10 + 5) * 2 = 30';
-  const brokenPercent = 'Coverage: 30% + 30% = 70%';
-  const brokenBudget = 'Card 1 (24.0cm) + gap (1.5cm) + Card 2 (16.5cm) + gap (1.5cm) + Card 3 (40.5cm) = 95.0 cm';
-  const lintValidBudget = runPreflightLinter(validBudget);
-  const lintBrokenPercent = runPreflightLinter(brokenPercent);
-  const lintBrokenBudget = runPreflightLinter(brokenBudget);
-  const labeledBudgetOk = lintValidBudget.ok && !lintBrokenPercent.ok && !lintBrokenBudget.ok;
+  const validCasesOk = validCases.every((text) => runPreflightLinter(text).ok);
+  const invalidCasesOk = invalidCases.every((text) => !runPreflightLinter(text).ok);
+  const linterMatrixOk = validCasesOk && invalidCasesOk;
 
-  // 4C: Tilde fences ~~~
+  // 4B: Tilde fences ~~~
   const lintTildeBroken = runPreflightLinter('~~~\nUnclosed tilde code block\n');
   const tildeFenceOk = !lintTildeBroken.ok;
 
-  // 4D: Repo / Sample PLAN.md verification (clean-clone resilient: passes even without untracked PLAN.md)
+  // 4C: Repo / Sample PLAN.md verification (clean-clone resilient: passes even without untracked PLAN.md)
   const planPath = resolve(ROOT, 'PLAN.md');
   const samplePlanText = `# Sample Hardened Implementation Plan\n\n## Overview\nSample architecture plan for clean clones.\n\n\`\`\`bash\ngit worktree add -b feat/test ../task-test\nnpm test\n\`\`\`\n\nTotal: 20 + 30 = 50\n`;
   const planText = existsSync(planPath) ? readFileSync(planPath, 'utf-8') : samplePlanText;
@@ -455,16 +493,16 @@ async function runBenchmark4() {
   const planDuration = (performance.now() - start).toFixed(2);
   const repoPlanOk = lintRepoPlan.ok;
 
-  const passed = multiOperandOk && labeledBudgetOk && tildeFenceOk && repoPlanOk;
+  const passed = linterMatrixOk && tildeFenceOk && repoPlanOk;
 
   recordResult({
     name: 'Pre-flight Consistency Linter (Multi-Operand & Unit Budget Check)',
     category: 'EFFICIENCY',
     passed,
-    metric: `Multi-operand: ${multiOperandOk} | Labeled Budget: ${labeledBudgetOk} | Tilde Fence: ${tildeFenceOk} | Plan Linter: ${repoPlanOk} (${planDuration}ms)`,
+    metric: `Audit Matrix (11 cases): ${linterMatrixOk} | Tilde Fence: ${tildeFenceOk} | Plan Linter: ${repoPlanOk} (${planDuration}ms)`,
     baseline: 'Crashing on N>=3 operands, missing labeled cm budgets, or blocking valid plans',
     target: 'Linear sub-millisecond linting of multi-operand equations, labeled unit budgets, and code fences',
-    details: 'Verified multi-operand sums, subtractions, decimal commas, percentage checks, and clean clone resilience.',
+    details: 'Verified 11 audit cases: non-linear skips, thousands commas, decimal commas, percentage checks, and clean clone resilience.',
   });
 }
 

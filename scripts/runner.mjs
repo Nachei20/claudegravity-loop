@@ -235,8 +235,18 @@ export function runPreflightLinter(planContent) {
     // Skip explanatory lines discussing equations or examples
     if (/\b(?:ej\.|example|e\.g\.|vs\s+total)\b/i.test(line)) continue;
 
-    // Normalize decimal commas (1,5 -> 1.5)
-    const normalized = line.replace(/(\d+),(\d+)/g, '$1.$2');
+    // Step 1: Remove thousands separator commas (e.g., 1,200 -> 1200, 1,500,000 -> 1500000)
+    let normalized = line.replace(/\b(\d{1,3})(?:,(\d{3}))+\b/g, (m) => m.replace(/,/g, ''));
+    // Step 2: Normalize decimal commas with 1-2 decimal digits only (e.g., 1,5 cm -> 1.5 cm)
+    normalized = normalized.replace(/(\d),(\d{1,2})(?!\d)/g, '$1.$2');
+
+    // Skip lines containing non-linear operators between numbers or after closing parenthesis (*, /, x, ×, ^)
+    // Placed strictly BEFORE Check A to prevent false positive sums on multiplicative formulas
+    const hasNonLinearOp = /\d\s*(?:cm|mm|px|pt|%)?\s*[x×*\/^]\s*\(?\s*\d/i.test(normalized) ||
+                           /\)\s*[x×*\/^]\s*\d/i.test(normalized);
+    if (hasNonLinearOp) {
+      continue;
+    }
 
     // Check A: Unit-based budget equations (e.g., cm, mm, px, pt, %)
     // Matches: "Card 1 (24.0cm) + gap (1.5cm) + ... = 84.0 cm" or "1.5cm - 0.5cm = 1.0cm"
@@ -260,8 +270,8 @@ export function runPreflightLinter(planContent) {
     }
 
     // Check B: Multi-operand arithmetic equations: "Total: 30 + 40 + 20 = 90" or "100 - 30 - 20 = 50"
-    // Skip lines with non-linear or parenthesized operators (*, /, x, ×, (), ^) to avoid false positives
-    if (/[*\/x×()^]/.test(normalized)) continue;
+    // Skip lines with parenthesized expressions for Check B
+    if (/[()]/.test(normalized)) continue;
 
     const eqMatch = normalized.match(/(?:^|:\s*)([0-9\s.+-]+)=\s*(-?[\d.]+)\s*$/);
     if (eqMatch) {
@@ -316,7 +326,8 @@ export function parseVerdict(stdout, status = 0, timedOut = false) {
   if (status !== 0) {
     return { verdict: 'ERROR', code: 5, status };
   }
-  const matches = [...stdout.matchAll(/^VERDICT:\s*(APPROVED|REVISE)\s*$/gim)];
+  // Accept bold markdown framing: e.g. **VERDICT: REVISE** or standard VERDICT: APPROVED
+  const matches = [...stdout.matchAll(/^\s*\*?\*?\s*VERDICT:\s*(APPROVED|REVISE)\s*\*?\*?\s*$/gim)];
   if (matches.length === 0) {
     return { verdict: null, code: 5, status: 0 };
   }
@@ -349,12 +360,21 @@ export function killProcessTree(pid) {
 
 export function executeReviewerAsync({ bin, args, prompt, env, stdin = true, timeout = 120000 }) {
   return new Promise((resolve) => {
+    // Security Invariant: Prohibit Windows batch shims (.cmd/.bat) to eliminate cmd.exe argument injection vulnerabilities
+    if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(bin)) {
+      return resolve({
+        status: 1,
+        stdout: '',
+        stderr: 'Windows batch shims (.cmd/.bat) are not supported for safety; install the native binary or point AGY_BIN_PATH to an .exe',
+        timedOut: false,
+      });
+    }
+
     let stdoutData = '';
     let stderrData = '';
     let timedOut = false;
     let timer = null;
 
-    const isWindowsBatch = process.platform === 'win32' && /\.(cmd|bat)$/i.test(bin);
     const spawnArgs = stdin ? args : (args.includes(prompt) ? args : [...args, prompt]);
 
     const child = spawn(bin, spawnArgs, {
@@ -362,7 +382,6 @@ export function executeReviewerAsync({ bin, args, prompt, env, stdin = true, tim
       env: env || process.env,
       windowsHide: true,
       detached: process.platform !== 'win32',
-      shell: isWindowsBatch,
     });
 
     // Multibyte-safe UTF-8 decoding on child streams (prevents U+FFFD on chunk boundary cuts)
@@ -460,16 +479,16 @@ Usage:
   node scripts/runner.mjs preflight [options]
 
 Options:
-  --plan <path>       Path to implementation plan (default: PLAN.md)
-  --log <path>        Path to review log (default: PLAN-REVIEW-LOG.md)
-  --rounds <n>        Maximum review rounds (default: 5)
-  --host <provider>   Current host runtime: 'claude' or 'antigravity' (default: claude)
-  --model <name>      Model override for the reviewer (e.g., 'sonnet', 'opus')
-  --auto-fallback     Automatically fallback upon policy/rate limits
-  --insecure-tls      Opt-in TLS bypass for corporate/local proxies (Warning logged)
-  --track <type>      Phase 3 track: 'code', 'artifact', or 'auto' (default: auto)
-  --timeout <ms>      Execution timeout per round in ms (default: 120000)
-  --no-stdin          Pass prompt as argv instead of streaming via stdin pipe
+  --plan <path>            Path to implementation plan (default: PLAN.md)
+  --log <path>             Path to review log (default: PLAN-REVIEW-LOG.md)
+  --host <provider>        Current host runtime: 'claude' or 'antigravity' (default: claude)
+  --model <name>           Model override for the reviewer (e.g., 'sonnet', 'opus')
+  --fallback-model <name>  Custom fallback model if primary fails with rate/policy limits
+  --auto-fallback          Automatically fallback upon policy/rate limits
+  --insecure-tls           Opt-in TLS bypass for corporate/local proxies (Warning logged)
+  --track <type>           Phase 3 track: 'code', 'artifact', or 'auto' (default: auto)
+  --timeout <ms>           Execution timeout per round in ms (default: 120000)
+  --no-stdin               Pass prompt as argv instead of streaming via stdin pipe
 `);
 }
 

@@ -101,14 +101,15 @@ Claudegravity Loop includes a zero-dependency native JavaScript CLI adapter to a
 node scripts/runner.mjs preflight
 
 # Run an automated adversarial review with streaming stdin, pre-flight linter, and bounded fallback
-node scripts/runner.mjs review --plan PLAN.md --rounds 5 --auto-fallback
+node scripts/runner.mjs review --plan PLAN.md --auto-fallback
 
 # Optional flags:
-#   --model <name>       Reviewer model override (e.g., 'sonnet', 'opus')
-#   --auto-fallback      Automatic 1-hop fallback on CBRN/policy/rate limits
-#   --insecure-tls       Opt-in TLS bypass for corporate/local proxies (Warning logged)
-#   --track <type>       Phase 3 track: 'code' (worktrees) or 'artifact' (render/extract)
-#   --timeout <ms>       Round timeout with clean process tree kill (default: 120000)
+#   --model <name>           Reviewer model override (e.g., 'sonnet', 'opus')
+#   --fallback-model <name>  Custom fallback model if primary fails with rate/policy limits
+#   --auto-fallback          Automatic 1-hop fallback on CBRN/policy/rate limits
+#   --insecure-tls           Opt-in TLS bypass for corporate/local proxies (Warning logged)
+#   --track <type>           Phase 3 track: 'code' (worktrees) or 'artifact' (render/extract)
+#   --timeout <ms>           Round timeout with clean process tree kill (default: 120000)
 
 # Run the empirical benchmark suite (5/5 passing benchmarks)
 npm run benchmark

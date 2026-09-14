@@ -30,3 +30,6 @@ jobs:
 
       - name: Run Validations
         run: npm test
+
+      - name: Run Empirical Benchmarks
+        run: npm run benchmark
