@@ -38,21 +38,52 @@ if (!existsSync(pluginPath)) {
   if (Array.isArray(plugin.skills)) {
     for (const skillRelPath of plugin.skills) {
       const fullPath = join(ROOT, skillRelPath);
-      const skillFile = join(fullPath, 'SKILL.md');
+      const skillFile = existsSync(join(fullPath, 'SKILL.md')) ? join(fullPath, 'SKILL.md') : fullPath;
       if (!existsSync(fullPath) && !existsSync(skillFile)) {
         console.error(`❌ Declared skill directory not found at: ${skillRelPath}`);
         errors++;
       } else {
+        // Validate YAML frontmatter (name and description)
+        if (existsSync(skillFile)) {
+          const content = readFileSync(skillFile, 'utf-8');
+          const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+          if (!fmMatch) {
+            console.error(`❌ SKILL.md missing valid '---' frontmatter at: ${skillRelPath}`);
+            errors++;
+          } else {
+            const fm = fmMatch[1];
+            const nameMatch = fm.match(/^name:\s*([^\r\n]+)/m);
+            const descMatch = fm.match(/^description:\s*(?:>-|[^\r\n]+)/m);
+            const expectedName = skillRelPath.split(/[/\\]/).filter(Boolean).pop();
+            if (!nameMatch || nameMatch[1].trim() !== expectedName) {
+              console.error(`❌ SKILL.md name mismatch in ${skillRelPath}: expected '${expectedName}', got '${nameMatch ? nameMatch[1].trim() : 'none'}'`);
+              errors++;
+            }
+            if (!descMatch || !descMatch[0].trim()) {
+              console.error(`❌ SKILL.md missing non-empty description in: ${skillRelPath}`);
+              errors++;
+            }
+          }
+        }
         console.log(`  - Skill verified -> ${skillRelPath}`);
       }
     }
   } else if (plugin.skills && typeof plugin.skills === 'object') {
     for (const [skillName, skillRelPath] of Object.entries(plugin.skills)) {
       const fullPath = join(ROOT, skillRelPath);
+      const skillFile = existsSync(join(fullPath, 'SKILL.md')) ? join(fullPath, 'SKILL.md') : fullPath;
       if (!existsSync(fullPath)) {
         console.error(`❌ Declared skill '${skillName}' not found at: ${skillRelPath}`);
         errors++;
       } else {
+        if (existsSync(skillFile)) {
+          const content = readFileSync(skillFile, 'utf-8');
+          const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+          if (!fmMatch) {
+            console.error(`❌ SKILL.md missing valid '---' frontmatter at: ${skillRelPath}`);
+            errors++;
+          }
+        }
         console.log(`  - Skill '${skillName}' verified -> ${skillRelPath}`);
       }
     }

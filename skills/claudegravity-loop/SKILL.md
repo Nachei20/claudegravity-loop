@@ -151,8 +151,8 @@ node "${CLAUDE_PLUGIN_ROOT:-.}/scripts/runner.mjs" review --plan PLAN.md --host 
   ```
 * **When Host is Antigravity** $\rightarrow$ Calls Claude Code:
   ```bash
-  claude --model sonnet -p "<adversarial prompt with inlined PLAN.md>"
-  # Or --model opus for deep architectural/concurrency tasks
+  claude --model sonnet --tools "" -p "<adversarial prompt with inlined PLAN.md>"
+  # Or --model opus --tools "" for deep architectural/concurrency tasks
   ```
 
 #### Model Selection Matrix (Claude Reviewer):

@@ -33,3 +33,15 @@ jobs:
 
       - name: Run Empirical Benchmarks
         run: npm run benchmark
+
+  test-on-node:
+    name: Test on Node
+    needs: test
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Evaluate matrix results
+        run: |
+          [ "${{ needs.test.result }}" = "success" ] || exit 1
+          echo "All matrix test jobs succeeded."
+
