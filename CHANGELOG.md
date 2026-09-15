@@ -9,24 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.1.1] - 2026-09-14
 
 ### Added
-- **GitHub Actions CI Aggregator**: Added dedicated `test-on-node` aggregator job named `"Test on Node"` to `.github/workflows/ci.yml` to satisfy repository branch protection rulesets without manual adjustments.
+- **GitHub Actions CI Aggregator**: Added dedicated `test-on-node` aggregator job named `"Test on Node"` to `.github/workflows/ci.yml` with strict success requirement (`needs.test.result == "success"`) to satisfy repository branch protection rulesets without manual adjustments.
 - **Dual-Locale Arithmetic Parsing**: Implemented formal dual-locale (US/EU) parsing in `runPreflightLinter` supporting period thousands separators (`1.200 + 300 = 1.500`) and full European decimals (`1.200,50 + 300 = 1.500,50`).
-- **Equation Segmentation Isolation**: Preflight consistency linter isolates equation segments once, preventing false positives from prefix tokens and false negatives from non-linear skips (`1080x1920`, dates).
-- **Linter Escape Hatch (`--skip-lint`)**: Added `--skip-lint` flag to `scripts/runner.mjs` allowing reviews to proceed when intentional or unstructured math is present, logging suppressed errors in `PLAN-REVIEW-LOG.md`.
+- **Equation Segmentation Isolation**: Preflight consistency linter cuts at the last colon whose prefix contains no term-connecting arithmetic operators (`+` or `-`), resolving labeled equations (e.g. `Column 2 (40cm): ...`, `Poster 90cm: ...`, `Layout: col A: ...`) without false positives.
+- **Calculated Sums in Diagnostics**: Restored calculated sums in linter error reporting (`calculated X != declared Y`) for both unit budgets and general equations.
+- **Linter Escape Hatch (`--skip-lint`)**: Added `--skip-lint` flag to `scripts/runner.mjs` allowing reviews to proceed when intentional or unstructured math is present, logging bypassed status and suppressed errors in `PLAN-REVIEW-LOG.md`.
 - **Antigravity CLI Timeout Intercept**: Runner injects `--print-timeout <timeout - 15>s` to `agy` and intercepts `/print timeout after/i` in `stderr`, treating partial timeout returns as exit code 124 rather than exit 0.
 - **Fallback On Timeout Opt-In (`--fallback-on-timeout`)**: Decoupled model fallback from execution timeouts; timeouts exit with code 124 by default unless `--fallback-on-timeout` is provided.
-- **Skill Frontmatter Validation**: `scripts/validate.mjs` validates YAML frontmatter (`---`, matching `name:`, non-empty `description:`) across all declared skills.
-- **Windows Executable Preference**: `getExecutable` prioritizes native `.exe` binaries over npm batch shims (`.cmd`, `.bat`, extensionless), and `preflight` clearly warns when only shims are detected.
-- **Complete Structured Extraction**: `extractStructuredArtifact` extracts all shapes and text nodes without blind slicing, decodes XML entities, handles element attributes, and accepts presentation XML for slide dimensions.
+- **Runner Timeout Guarantee**: `executeReviewerAsync` guarantees process termination via a grace period and stdio destruction upon timeout expiration, preventing hanging runs when child processes inherit open stdio pipes.
+- **Skill Frontmatter & Description Validation**: `scripts/validate.mjs` validates YAML frontmatter (`---`, matching `name:`, non-empty `description:` including block scalars) across all declared skills, verified with negative fixtures.
+- **Windows Executable Preference & Shim Detection**: `pickExecutable` prioritizes native `.exe` binaries over npm batch shims (`.cmd`, `.bat`, extensionless), tested against pure fixtures; `isWindowsShim` is immune to directory paths containing dots (`john.doe`).
+- **Single-Pass XML Entity Decoding**: `decodeXmlEntities` performs single-pass regex replacement preventing double-decoding (e.g. `&amp;lt;b&amp;gt;` $\rightarrow$ `&lt;b&gt;`) and decoding numeric entities (`&#233;`, `&#x...;`).
+- **Complete Structured Extraction**: `extractStructuredArtifact` extracts all shapes and text nodes without blind slicing, decodes XML entities, returns `null` for slide dimensions when presentation XML is absent, and handles presentation slide sizes.
 
 ### Changed
 - **Behavior Changes**:
-  - Unrecognized flags or options missing required values now immediately exit with code 1 and display usage instructions instead of being silently ignored.
+  - CLI commands and options strictly validated: unknown commands, missing commands, and unexpected positional arguments exit immediately with code 1 and usage instructions. Only `help`, `--help`, and `-h` exit with code 0.
   - Default runner timeout increased from 120 seconds to 600 seconds (10 minutes).
   - `--rounds` is formally deprecated and ignored with a warning (single round per CLI invocation to allow host arbitration in `PLAN-REVIEW-LOG.md`).
-- **Track Detection**: `detectTrack` now requires explicit path indicators (`/`, `\`, backticks) or build/test commands, eliminating false positive code classifications on prose documents.
+- **Track Detection**: `detectTrack` requires explicit path indicators (`/`, `\`, backticks) or build/test commands, eliminating false positive code classifications on prose documents.
+- **Documentation**: Accurately documented runtime-specific global skill discovery directories (`~/.claude/skills/` for Claude Code vs `~/.agents/skills/` for Antigravity `agy`) in `README.md`.
 - **Dynamic Versioning**: Runner and benchmark suites dynamically synchronize version strings from `package.json`.
-- **Documentation**: Corrected global skill installation instructions for "Method B" in `README.md` and added `--tools ""` to direct `claude -p` invocation examples in `SKILL.md`.
 
 ---
 

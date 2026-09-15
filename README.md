@@ -155,19 +155,35 @@ In Claude Code, add the marketplace repository and install:
 ```
 
 ### Method B: Install as Global Agent Skills
-Agent runtimes (including **Claude Code** and **Google Antigravity CLI**) discover skills located at `~/.agents/skills/<skill-name>/SKILL.md` (one level deep).
+Different agent CLIs discover user skills in different global directories:
+* **Claude Code**: Discovers skills located at `~/.claude/skills/<skill-name>/SKILL.md`.
+* **Google Antigravity CLI (`agy`)**: Discovers skills located at `~/.agents/skills/<skill-name>/SKILL.md` (or workspace `.agents/skills/`).
 
-Clone the repository and copy or symlink the individual skills into your global agent skills directory:
-```bash
-git clone https://github.com/Nachei20/claudegravity-loop.git /tmp/claudegravity-loop
-cp -r /tmp/claudegravity-loop/skills/* ~/.agents/skills/
-```
-On Windows PowerShell:
-```powershell
-git clone https://github.com/Nachei20/claudegravity-loop.git "$env:TEMP\claudegravity-loop"
-Copy-Item -Recurse "$env:TEMP\claudegravity-loop\skills\*" "$env:USERPROFILE\.agents\skills\"
-```
-Both **Claude Code** and **Google Antigravity CLI** will automatically discover and load all 4 skills.
+Clone the repository and copy or symlink the skills into the respective directories:
+
+**For Claude Code:**
+* Linux / macOS:
+  ```bash
+  mkdir -p ~/.claude/skills
+  cp -r skills/* ~/.claude/skills/
+  ```
+* Windows PowerShell:
+  ```powershell
+  New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.claude\skills"
+  Copy-Item -Recurse "skills\*" "$env:USERPROFILE\.claude\skills\"
+  ```
+
+**For Google Antigravity (`agy`):**
+* Linux / macOS:
+  ```bash
+  mkdir -p ~/.agents/skills
+  cp -r skills/* ~/.agents/skills/
+  ```
+* Windows PowerShell:
+  ```powershell
+  New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.agents\skills"
+  Copy-Item -Recurse "skills\*" "$env:USERPROFILE\.agents\skills\"
+  ```
 
 ---
 

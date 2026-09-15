@@ -8,7 +8,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, realpathSync } from 'node:fs';
-import { dirname, resolve, join } from 'node:path';
+import { dirname, resolve, join, basename, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import process from 'node:process';
@@ -33,6 +33,22 @@ export const FALLBACK_SIGNALS = [
   /ETIMEDOUT|ECONNRESET/i,
   /UND_ERR_CONNECT_TIMEOUT/i
 ];
+
+export function pickExecutable(lines, platform = process.platform) {
+  if (!Array.isArray(lines) || lines.length === 0) return null;
+  if (platform === 'win32') {
+    const exeMatch = lines.find((l) => l.toLowerCase().endsWith('.exe'));
+    if (exeMatch) return exeMatch;
+  }
+  return lines[0];
+}
+
+export function isWindowsShim(binPath) {
+  if (!binPath) return false;
+  const base = basename(binPath).toLowerCase();
+  const ext = extname(base);
+  return ext === '' || ext === '.cmd' || ext === '.bat' || ext === '.ps1';
+}
 
 export function getExecutable(bin) {
   if (bin === 'agy') {
@@ -68,11 +84,8 @@ export function getExecutable(bin) {
   const res = spawnSync(lookupCmd, [bin], { encoding: 'utf-8' });
   if (res.status === 0 && res.stdout.trim()) {
     const lines = res.stdout.trim().split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-    if (process.platform === 'win32') {
-      const exeMatch = lines.find((l) => l.toLowerCase().endsWith('.exe'));
-      if (exeMatch) return exeMatch;
-    }
-    return lines[0];
+    const picked = pickExecutable(lines, process.platform);
+    if (picked) return picked;
   }
   return bin;
 }
@@ -87,8 +100,24 @@ export function parseArgs(args) {
     process.exit(0);
   }
 
-  const hasPositionalCmd = args[0] && !args[0].startsWith('-');
-  const command = hasPositionalCmd ? args[0] : 'help';
+  if (args.length === 0) {
+    console.error("❌ Error: Missing command. Expected 'review', 'preflight', or 'help'.");
+    printUsage();
+    process.exit(1);
+  }
+
+  const command = args[0];
+  if (command.startsWith('-')) {
+    console.error(`❌ Error: Missing command before flag '${command}'. Expected 'review', 'preflight', or 'help'.`);
+    printUsage();
+    process.exit(1);
+  }
+
+  if (!['review', 'preflight', 'help'].includes(command)) {
+    console.error(`❌ Error: Unknown command '${command}'. Expected 'review', 'preflight', or 'help'.`);
+    printUsage();
+    process.exit(1);
+  }
 
   const options = {
     command,
@@ -107,8 +136,7 @@ export function parseArgs(args) {
     skipLint: false,
   };
 
-  const startIndex = hasPositionalCmd ? 1 : 0;
-  for (let i = startIndex; i < args.length; i++) {
+  for (let i = 1; i < args.length; i++) {
     const arg = args[i];
 
     if (arg === '--help' || arg === '-h') {
@@ -208,6 +236,11 @@ export function parseArgs(args) {
       printUsage();
       process.exit(1);
     }
+    else {
+      console.error(`❌ Error: Unexpected positional argument '${arg}'.`);
+      printUsage();
+      process.exit(1);
+    }
   }
 
   // Normalize and validate host
@@ -278,42 +311,39 @@ export function decideFallback({ currentModel, reviewer, status, output, autoFal
   return { shouldFallback: false, nextModel: null };
 }
 
+export function decodeXmlEntities(str) {
+  if (!str) return '';
+  return str.replace(/&(?:#x([0-9a-fA-F]+)|#(\d+)|([a-zA-Z]+));/g, (match, hex, dec, named) => {
+    if (hex) return String.fromCodePoint(parseInt(hex, 16));
+    if (dec) return String.fromCodePoint(parseInt(dec, 10));
+    switch (named) {
+      case 'lt': return '<';
+      case 'gt': return '>';
+      case 'quot': return '"';
+      case 'apos': return "'";
+      case 'amp': return '&';
+      default: return match;
+    }
+  });
+}
+
 export function extractStructuredArtifact(slideXml, options = {}) {
   const { presentationXml = null, maxShapes = null } = options;
   if (typeof slideXml !== 'string') {
     return { slide_dimensions: null, shapes: [], shape_count: 0, text_nodes: [], total_text_nodes: 0, truncated: false };
   }
 
-  function decodeXmlEntities(str) {
-    return str
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&apos;/g, "'");
-  }
-
   let slide_dimensions = null;
-  if (typeof presentationXml === 'string') {
-    const sldSzMatch = presentationXml.match(/<p:sldSz\s+[^>]*cx="(\d+)"\s+cy="(\d+)"/i) ||
-                       presentationXml.match(/<p:sldSz\s+cx="(\d+)"\s+cy="(\d+)"/i);
+  const szXml = (typeof presentationXml === 'string' && presentationXml) || (slideXml.includes('<p:sldSz') ? slideXml : null);
+  if (szXml) {
+    const sldSzMatch = szXml.match(/<p:sldSz\s+[^>]*cx="(\d+)"\s+cy="(\d+)"/i) ||
+                       szXml.match(/<p:sldSz\s+cx="(\d+)"\s+cy="(\d+)"/i);
     if (sldSzMatch) {
       slide_dimensions = {
         width_emu: parseInt(sldSzMatch[1], 10),
         height_emu: parseInt(sldSzMatch[2], 10),
         width_cm: parseFloat((parseInt(sldSzMatch[1], 10) / 360000).toFixed(2)),
         height_cm: parseFloat((parseInt(sldSzMatch[2], 10) / 360000).toFixed(2)),
-      };
-    }
-  }
-  if (!slide_dimensions) {
-    const dimMatch = slideXml.match(/<a:ext\s+cx="(\d+)"\s+cy="(\d+)"/i);
-    if (dimMatch) {
-      slide_dimensions = {
-        width_emu: parseInt(dimMatch[1], 10),
-        height_emu: parseInt(dimMatch[2], 10),
-        width_cm: parseFloat((parseInt(dimMatch[1], 10) / 360000).toFixed(2)),
-        height_cm: parseFloat((parseInt(dimMatch[2], 10) / 360000).toFixed(2)),
       };
     }
   }
@@ -361,13 +391,13 @@ export function extractEquationSegment(line) {
     left = left.slice(lastSemi + 1);
   }
 
-  // 2. Cut at ':' only if the prefix before ':' does not contain numbers with units (\d+\s*(?:cm|mm|px|pt|%))
+  // 2. Cut at the last ':' whose prefix does NOT contain an arithmetic operator that connects terms (+ or -)
   const colons = [...left.matchAll(/:/g)];
   for (let i = colons.length - 1; i >= 0; i--) {
     const colIdx = colons[i].index;
     const prefixBeforeCol = left.slice(0, colIdx);
-    const hasUnitsInPrefix = /\d+\s*(?:cm|mm|px|pt|%)/i.test(prefixBeforeCol);
-    if (!hasUnitsInPrefix) {
+    const hasArithmeticInPrefix = /\+|\s+-\s+|\d\s*-\s*\d/.test(prefixBeforeCol);
+    if (!hasArithmeticInPrefix) {
       left = left.slice(colIdx + 1);
       break;
     }
@@ -518,7 +548,7 @@ export function runPreflightLinter(planContent) {
         continue;
       } else {
         const u = (unitUS || unitEU);
-        errors.push(`Arithmetic inconsistency in ${u.unit} budget (line ${i + 1}): calculated sum does not match declared ${u.declared.toFixed(2)} ${u.unit} in '${trimmed}'.`);
+        errors.push(`Arithmetic inconsistency in ${u.unit} budget (line ${i + 1}): calculated sum (${u.calculated.toFixed(2)} ${u.unit}) does not match declared (${u.declared.toFixed(2)} ${u.unit}) in '${trimmed}'.`);
         continue;
       }
     }
@@ -539,7 +569,7 @@ export function runPreflightLinter(planContent) {
         }
       } else {
         const g = (genUS || genEU);
-        errors.push(`Equation error (line ${i + 1}): ${g.leftSide} = ${g.declared} in '${trimmed}'`);
+        errors.push(`Equation error (line ${i + 1}): calculated ${g.calculated} != declared ${g.declared} (LHS: ${g.leftSide}) in '${trimmed}'.`);
       }
     }
   }
@@ -618,6 +648,8 @@ export async function executeReviewerAsync({ bin, args = [], prompt, env = proce
     let stderrData = '';
     let timedOut = false;
     let timer = null;
+    let graceTimer = null;
+    let settled = false;
 
     const child = spawn(bin, args, {
       env,
@@ -625,6 +657,23 @@ export async function executeReviewerAsync({ bin, args = [], prompt, env = proce
       detached: process.platform !== 'win32',
       windowsHide: true,
     });
+
+    const cleanupSignals = () => {
+      process.removeListener('SIGINT', onSigInt);
+      process.removeListener('SIGTERM', onSigTerm);
+    };
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (graceTimer) clearTimeout(graceTimer);
+      cleanupSignals();
+      try { child.stdout?.destroy(); } catch (_) {}
+      try { child.stderr?.destroy(); } catch (_) {}
+      try { child.stdin?.destroy(); } catch (_) {}
+      resolve(result);
+    };
 
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
@@ -641,6 +690,15 @@ export async function executeReviewerAsync({ bin, args = [], prompt, env = proce
       timer = setTimeout(() => {
         timedOut = true;
         killProcessTree(child.pid);
+        graceTimer = setTimeout(() => {
+          finish({
+            status: 124,
+            signal: null,
+            stdout: stdoutData,
+            stderr: stderrData + '\n[runner] Execution timed out; stdio streams closed after grace period.',
+            timedOut: true,
+          });
+        }, 1500);
       }, timeout);
     }
 
@@ -657,15 +715,8 @@ export async function executeReviewerAsync({ bin, args = [], prompt, env = proce
     process.once('SIGINT', onSigInt);
     process.once('SIGTERM', onSigTerm);
 
-    const cleanupSignals = () => {
-      process.removeListener('SIGINT', onSigInt);
-      process.removeListener('SIGTERM', onSigTerm);
-    };
-
     child.on('error', (err) => {
-      if (timer) clearTimeout(timer);
-      cleanupSignals();
-      resolve({
+      finish({
         status: 1,
         stdout: stdoutData,
         stderr: stderrData + '\n' + err.message,
@@ -674,12 +725,10 @@ export async function executeReviewerAsync({ bin, args = [], prompt, env = proce
     });
 
     child.on('close', (code, signal) => {
-      if (timer) clearTimeout(timer);
-      cleanupSignals();
       const isAgyPrintTimeout = /print timeout after/i.test(stderrData);
       const effectiveTimedOut = timedOut || isAgyPrintTimeout;
       const exitCode = effectiveTimedOut ? 124 : (code !== null ? code : (signal ? 128 : 1));
-      resolve({
+      finish({
         status: exitCode,
         signal: signal || null,
         stdout: stdoutData,
@@ -694,17 +743,17 @@ export async function executeReviewerAsync({ bin, args = [], prompt, env = proce
     });
 
     if (stdin) {
-      if (!child.stdin.destroyed) {
-        child.stdin.write(Buffer.from(prompt, 'utf-8'), (err) => {
-          if (!err && !child.stdin.destroyed) {
-            child.stdin.end();
-          }
-        });
-      }
+      try {
+        if (!child.stdin.destroyed) {
+          child.stdin.end(Buffer.from(prompt, 'utf-8'));
+        }
+      } catch (_) {}
     } else {
-      if (!child.stdin.destroyed) {
-        child.stdin.end();
-      }
+      try {
+        if (!child.stdin.destroyed) {
+          child.stdin.end();
+        }
+      } catch (_) {}
     }
   });
 }
@@ -733,12 +782,6 @@ Options:
   --help, -h               Show this usage guide
   --version, -v            Show runner version
 `);
-}
-
-function isWindowsShim(binPath) {
-  if (process.platform !== 'win32' || !binPath) return false;
-  const lower = binPath.toLowerCase();
-  return lower.endsWith('.cmd') || lower.endsWith('.bat') || (!lower.endsWith('.exe') && !lower.includes('.'));
 }
 
 export function runPreflight(options = {}) {
@@ -803,7 +846,11 @@ export async function runReview(options) {
   if (lintResult.warnings.length > 0) {
     lintResult.warnings.forEach((warn) => console.warn(`  ⚠️ Warning: ${warn}`));
   }
-  console.log('✅ Pre-flight Linter passed successfully.');
+  if (!lintResult.ok && options.skipLint) {
+    console.log('⚠️ Pre-flight Linter bypassed via --skip-lint.');
+  } else {
+    console.log('✅ Pre-flight Linter passed successfully.');
+  }
 
   // Step 2: Track Detection
   const track = detectTrack(planContent, options.track);
@@ -969,8 +1016,13 @@ if (isDirectExecution) {
       await runReview(opts);
       break;
     case 'help':
-    default:
       printUsage();
+      process.exit(0);
+      break;
+    default:
+      console.error(`❌ Error: Unknown command '${opts.command}'.`);
+      printUsage();
+      process.exit(1);
       break;
   }
 }
