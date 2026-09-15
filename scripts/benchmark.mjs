@@ -357,12 +357,13 @@ async function runBenchmark2() {
                              (shimPick === 'C:\\tools\\claude.cmd') &&
                              (posixPick === '/usr/local/bin/claude');
 
-          // 7. isWindowsShim with dot in directory path (I3 check)
-          const dotPathShim = isWindowsShim ? isWindowsShim('C:\\Users\\john.doe\\npm\\claude') : false;
-          const dotPathExe = isWindowsShim ? isWindowsShim('C:\\Users\\john.doe\\npm\\claude.exe') : true;
-          shimDetectionOk = (process.platform === 'win32')
-            ? (dotPathShim === true && dotPathExe === false)
-            : true;
+          // 7. isWindowsShim pure function with platform guard and dot in directory path (R1 & I3 check)
+          const posixBinShim = isWindowsShim ? isWindowsShim('/home/u/.local/bin/claude', 'linux') : true;
+          const winDotPathShim = isWindowsShim ? isWindowsShim('C:\\Users\\john.doe\\npm\\claude', 'win32') : false;
+          const winDotPathExe = isWindowsShim ? isWindowsShim('C:\\Users\\john.doe\\npm\\claude.exe', 'win32') : true;
+          shimDetectionOk = (posixBinShim === false) &&
+                            (winDotPathShim === true) &&
+                            (winDotPathExe === false);
 
           server.close(() => resolveSuite());
         } catch (err) {
@@ -381,10 +382,10 @@ async function runBenchmark2() {
     name: 'Scoped TLS Invariant & Case-Insensitive Env Scrubbing (buildChildEnv)',
     category: 'SECURITY',
     passed,
-    metric: `Default Reject: ${defaultRejected ? 'YES' : 'NO'} | Casing Scrub (D7): ${caseScrubbingWorked ? 'YES' : 'NO'} | Opt-in Success: ${optInAllowed ? 'YES' : 'NO'} | Injection Immune: ${cmdInjectionImmune ? 'YES' : 'NO'} | Exe Preferred: ${windowsExePreferred ? 'YES' : 'NO'} | Pick Exe (M4): ${pickExecutableOk} | Shim Dot-path (I3): ${shimDetectionOk}`,
+    metric: `Default Reject: ${defaultRejected ? 'YES' : 'NO'} | Casing Scrub (D7): ${caseScrubbingWorked ? 'YES' : 'NO'} | Opt-in Success: ${optInAllowed ? 'YES' : 'NO'} | Injection Immune: ${cmdInjectionImmune ? 'YES' : 'NO'} | Exe Preferred: ${windowsExePreferred ? 'YES' : 'NO'} | Pick Exe (M4): ${pickExecutableOk} | Shim Guard (R1/I3): ${shimDetectionOk}`,
     baseline: 'Unconditional global TLS bypass, casing leak, or cmd.exe shell injection vulnerability',
     target: 'Default-secure TLS, case-insensitive scrubbing, and complete cmd.exe shell injection elimination',
-    details: 'Verified real buildChildEnv against casing variations (M1), bypass (M2), batch shim injection immunity, .exe preference (M4), and dot-path shim detection (I3).',
+    details: 'Verified real buildChildEnv against casing variations (M1), bypass (M2), batch shim injection immunity, .exe preference (M4), platform-scoped shim guard (R1), and dot-path shim detection (I3).',
   });
 }
 

@@ -8,7 +8,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, realpathSync } from 'node:fs';
-import { dirname, resolve, join, basename, extname } from 'node:path';
+import { dirname, resolve, join, basename, extname, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import process from 'node:process';
@@ -43,10 +43,10 @@ export function pickExecutable(lines, platform = process.platform) {
   return lines[0];
 }
 
-export function isWindowsShim(binPath) {
-  if (!binPath) return false;
-  const base = basename(binPath).toLowerCase();
-  const ext = extname(base);
+export function isWindowsShim(binPath, platform = process.platform) {
+  if (!binPath || platform !== 'win32') return false;
+  const base = win32.basename(binPath).toLowerCase();
+  const ext = win32.extname(base);
   return ext === '' || ext === '.cmd' || ext === '.bat' || ext === '.ps1';
 }
 
