@@ -1,20 +1,28 @@
 #!/usr/bin/env node
 
 /**
- * Claudegravity Loop Runner — Hardened v1.1.0
+ * Claudegravity Loop Runner — Hardened v1.1.1
  * Standard-library zero-dependency CLI adapter for automating cross-model review rounds.
  * Node.js 18+ (Windows, macOS, Linux).
  */
 
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, realpathSync } from 'node:fs';
-import { dirname, resolve, join } from 'node:path';
+import { dirname, resolve, join, basename, extname, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import process from 'node:process';
 
 const __dirname = import.meta.dirname ?? dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
+
+let PKG_VERSION = '1.1.1';
+try {
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'));
+  PKG_VERSION = pkg.version || '1.1.1';
+} catch {
+  PKG_VERSION = 'unknown';
+}
 
 export const FALLBACK_SIGNALS = [
   /policy\s*(?:violation|block|filter)/i,
@@ -25,6 +33,22 @@ export const FALLBACK_SIGNALS = [
   /ETIMEDOUT|ECONNRESET/i,
   /UND_ERR_CONNECT_TIMEOUT/i
 ];
+
+export function pickExecutable(lines, platform = process.platform) {
+  if (!Array.isArray(lines) || lines.length === 0) return null;
+  if (platform === 'win32') {
+    const exeMatch = lines.find((l) => l.toLowerCase().endsWith('.exe'));
+    if (exeMatch) return exeMatch;
+  }
+  return lines[0];
+}
+
+export function isWindowsShim(binPath, platform = process.platform) {
+  if (!binPath || platform !== 'win32') return false;
+  const base = win32.basename(binPath).toLowerCase();
+  const ext = win32.extname(base);
+  return ext === '' || ext === '.cmd' || ext === '.bat' || ext === '.ps1';
+}
 
 export function getExecutable(bin) {
   if (bin === 'agy') {
@@ -40,18 +64,63 @@ export function getExecutable(bin) {
       if (existsSync(unixPath)) return unixPath;
     }
   }
+  if (bin === 'claude') {
+    if (process.env.CLAUDE_BIN_PATH && existsSync(process.env.CLAUDE_BIN_PATH)) {
+      return process.env.CLAUDE_BIN_PATH;
+    }
+    if (process.platform === 'win32') {
+      const localBin = join(os.homedir(), '.local', 'bin', 'claude.exe');
+      if (existsSync(localBin)) return localBin;
+      const localAppData = process.env.LOCALAPPDATA || join(os.homedir(), 'AppData', 'Local');
+      const progPath = join(localAppData, 'Programs', 'claude', 'claude.exe');
+      if (existsSync(progPath)) return progPath;
+    } else {
+      const unixPath = join(os.homedir(), '.local', 'bin', 'claude');
+      if (existsSync(unixPath)) return unixPath;
+    }
+  }
 
   const lookupCmd = process.platform === 'win32' ? 'where.exe' : 'which';
   const res = spawnSync(lookupCmd, [bin], { encoding: 'utf-8' });
   if (res.status === 0 && res.stdout.trim()) {
-    return res.stdout.trim().split(/\r?\n/)[0].trim();
+    const lines = res.stdout.trim().split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const picked = pickExecutable(lines, process.platform);
+    if (picked) return picked;
   }
   return bin;
 }
 
 export function parseArgs(args) {
+  if (args.includes('--help') || args.includes('-h') || args[0] === 'help') {
+    printUsage();
+    process.exit(0);
+  }
+  if (args.includes('--version') || args.includes('-v')) {
+    console.log(`claudegravity-loop v${PKG_VERSION}`);
+    process.exit(0);
+  }
+
+  if (args.length === 0) {
+    console.error("❌ Error: Missing command. Expected 'review', 'preflight', or 'help'.");
+    printUsage();
+    process.exit(1);
+  }
+
+  const command = args[0];
+  if (command.startsWith('-')) {
+    console.error(`❌ Error: Missing command before flag '${command}'. Expected 'review', 'preflight', or 'help'.`);
+    printUsage();
+    process.exit(1);
+  }
+
+  if (!['review', 'preflight', 'help'].includes(command)) {
+    console.error(`❌ Error: Unknown command '${command}'. Expected 'review', 'preflight', or 'help'.`);
+    printUsage();
+    process.exit(1);
+  }
+
   const options = {
-    command: args[0] || 'help',
+    command,
     plan: 'PLAN.md',
     log: 'PLAN-REVIEW-LOG.md',
     rounds: 5,
@@ -59,45 +128,119 @@ export function parseArgs(args) {
     model: null,
     fallbackModel: null,
     autoFallback: false,
+    fallbackOnTimeout: false,
     insecureTls: false,
     track: 'auto',
-    timeout: 120000,
+    timeout: 600000,
     stdin: true,
+    skipLint: false,
   };
 
   for (let i = 1; i < args.length; i++) {
     const arg = args[i];
+
+    if (arg === '--help' || arg === '-h') {
+      printUsage();
+      process.exit(0);
+    }
+    if (arg === '--version' || arg === '-v') {
+      console.log(`claudegravity-loop v${PKG_VERSION}`);
+      process.exit(0);
+    }
+
     if (arg.startsWith('--plan=')) options.plan = arg.slice(7);
-    else if (arg === '--plan' && args[i + 1]) options.plan = args[++i];
+    else if (arg === '--plan') {
+      if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+        console.error(`❌ Error: Flag '--plan' requires a file path argument.`);
+        printUsage();
+        process.exit(1);
+      }
+      options.plan = args[++i];
+    }
     else if (arg.startsWith('--log=')) options.log = arg.slice(6);
-    else if (arg === '--log' && args[i + 1]) options.log = args[++i];
+    else if (arg === '--log') {
+      if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+        console.error(`❌ Error: Flag '--log' requires a file path argument.`);
+        printUsage();
+        process.exit(1);
+      }
+      options.log = args[++i];
+    }
     else if (arg.startsWith('--rounds=')) {
       const r = parseInt(arg.slice(9), 10);
       options.rounds = isNaN(r) ? 5 : r;
+      console.warn('⚠️ Warning: --rounds is deprecated and ignored (one round per CLI invocation to allow host arbitration in PLAN-REVIEW-LOG.md).');
     }
-    else if (arg === '--rounds' && args[i + 1]) {
-      const r = parseInt(args[++i], 10);
-      options.rounds = isNaN(r) ? 5 : r;
+    else if (arg === '--rounds') {
+      if (i + 1 < args.length && !args[i + 1].startsWith('-') && !isNaN(parseInt(args[i + 1], 10))) {
+        options.rounds = parseInt(args[++i], 10);
+      }
+      console.warn('⚠️ Warning: --rounds is deprecated and ignored (one round per CLI invocation to allow host arbitration in PLAN-REVIEW-LOG.md).');
     }
     else if (arg.startsWith('--host=')) options.host = arg.slice(7);
-    else if (arg === '--host' && args[i + 1]) options.host = args[++i];
+    else if (arg === '--host') {
+      if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+        console.error(`❌ Error: Flag '--host' requires a provider argument ('claude' or 'antigravity').`);
+        printUsage();
+        process.exit(1);
+      }
+      options.host = args[++i];
+    }
     else if (arg.startsWith('--model=')) options.model = arg.slice(8);
-    else if (arg === '--model' && args[i + 1]) options.model = args[++i];
+    else if (arg === '--model') {
+      if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+        console.error(`❌ Error: Flag '--model' requires a model name argument.`);
+        printUsage();
+        process.exit(1);
+      }
+      options.model = args[++i];
+    }
     else if (arg.startsWith('--fallback-model=')) options.fallbackModel = arg.slice(17);
-    else if (arg === '--fallback-model' && args[i + 1]) options.fallbackModel = args[++i];
+    else if (arg === '--fallback-model') {
+      if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+        console.error(`❌ Error: Flag '--fallback-model' requires a model name argument.`);
+        printUsage();
+        process.exit(1);
+      }
+      options.fallbackModel = args[++i];
+    }
     else if (arg === '--auto-fallback') options.autoFallback = true;
+    else if (arg === '--fallback-on-timeout') options.fallbackOnTimeout = true;
     else if (arg === '--insecure-tls') options.insecureTls = true;
     else if (arg.startsWith('--track=')) options.track = arg.slice(8);
-    else if (arg === '--track' && args[i + 1]) options.track = args[++i];
+    else if (arg === '--track') {
+      if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+        console.error(`❌ Error: Flag '--track' requires an argument ('code', 'artifact', or 'auto').`);
+        printUsage();
+        process.exit(1);
+      }
+      options.track = args[++i];
+    }
     else if (arg.startsWith('--timeout=')) {
       const t = parseInt(arg.slice(10), 10);
-      options.timeout = isNaN(t) ? 120000 : t;
+      options.timeout = isNaN(t) ? 600000 : t;
     }
-    else if (arg === '--timeout' && args[i + 1]) {
+    else if (arg === '--timeout') {
+      if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+        console.error(`❌ Error: Flag '--timeout' requires a numeric millisecond argument.`);
+        printUsage();
+        process.exit(1);
+      }
       const t = parseInt(args[++i], 10);
-      options.timeout = isNaN(t) ? 120000 : t;
+      options.timeout = isNaN(t) ? 600000 : t;
     }
     else if (arg === '--no-stdin') options.stdin = false;
+    else if (arg === '--skip-lint') options.skipLint = true;
+    else if (arg.startsWith('-')) {
+      console.error(`❌ Error: Unknown flag '${arg}'.`);
+      printUsage();
+      process.exit(1);
+    }
+    else {
+      console.error(`❌ Error: Unexpected positional argument '${arg}'.`);
+      printUsage();
+      process.exit(1);
+    }
   }
 
   // Normalize and validate host
@@ -118,10 +261,17 @@ export function detectTrack(planContent, requestedTrack = 'auto') {
     console.warn(`⚠️ Unknown track '${requestedTrack}'. Defaulting to 'auto'.`);
   }
 
-  // Prioritize codebase indicators: files, tests, programming keywords
-  const hasCodeIndicators = /(?:git\s+worktree|PROOF_CMD|npm\s+(?:test|run)|pytest|cargo|go\s+test|\b(?:function|class|import|def|struct|const|let|var)\b|\.(?:ts|js|mjs|py|go|rs|cpp|c|java|cs|sh))\b/i.test(planContent);
+  const hasStrongCodeIndicators =
+    /\bPROOF_CMD\b/.test(planContent) ||
+    /\bgit\s+worktree\b/i.test(planContent) ||
+    /\b(?:npm|pnpm|yarn|bun)\s+(?:test|run|install|build)\b/i.test(planContent) ||
+    /\b(?:pytest|cargo\s+(?:test|build)|go\s+(?:test|build))\b/i.test(planContent) ||
+    /(?:`[^`]*[/\\][\w-]+\.(?:ts|js|mjs|cjs|py|go|rs|cpp|c|java|cs|sh|rb|php)\b[^`]*`)/i.test(planContent) ||
+    /(?:[/\\](?:src|lib|test|tests|scripts)[/\\][\w-]+\.(?:ts|js|mjs|cjs|py|go|rs|cpp|c|java|cs|sh)\b)/i.test(planContent) ||
+    /(?:^|\s)[\w-]+\.(?:ts|py|go|rs|cpp|java|cs)\b/i.test(planContent);
+
   const artifactPatterns = /\.(?:pptx|pdf|docx|xlsx|svg|drawio|cad)\b/i;
-  const isArtifactDeliverable = artifactPatterns.test(planContent) && !hasCodeIndicators;
+  const isArtifactDeliverable = artifactPatterns.test(planContent) && !hasStrongCodeIndicators;
   return isArtifactDeliverable ? 'artifact' : 'code';
 }
 
@@ -141,8 +291,9 @@ export function buildChildEnv(options = {}, baseEnv = process.env) {
   return childEnv;
 }
 
-export function decideFallback({ currentModel, reviewer, status, output, autoFallback = true, timedOut = false, fallbackModel = null }) {
-  const isFallbackSignal = timedOut || FALLBACK_SIGNALS.some((pattern) => pattern.test(output));
+export function decideFallback({ currentModel, reviewer, status, output, autoFallback = true, timedOut = false, fallbackModel = null, fallbackOnTimeout = false }) {
+  const isTimeoutSignal = (timedOut || /print timeout after/i.test(output)) && fallbackOnTimeout;
+  const isFallbackSignal = isTimeoutSignal || FALLBACK_SIGNALS.some((pattern) => pattern.test(output));
   if (status !== 0 && autoFallback && isFallbackSignal) {
     if (fallbackModel) {
       return { shouldFallback: true, nextModel: fallbackModel };
@@ -160,43 +311,185 @@ export function decideFallback({ currentModel, reviewer, status, output, autoFal
   return { shouldFallback: false, nextModel: null };
 }
 
-export function extractStructuredArtifact(xmlString) {
-  if (typeof xmlString !== 'string') {
-    return { slide_dimensions: null, elements: [], count: 0 };
+export function decodeXmlEntities(str) {
+  if (!str) return '';
+  return str.replace(/&(?:#x([0-9a-fA-F]+)|#(\d+)|([a-zA-Z]+));/g, (match, hex, dec, named) => {
+    if (hex) return String.fromCodePoint(parseInt(hex, 16));
+    if (dec) return String.fromCodePoint(parseInt(dec, 10));
+    switch (named) {
+      case 'lt': return '<';
+      case 'gt': return '>';
+      case 'quot': return '"';
+      case 'apos': return "'";
+      case 'amp': return '&';
+      default: return match;
+    }
+  });
+}
+
+export function extractStructuredArtifact(slideXml, options = {}) {
+  const { presentationXml = null, maxShapes = null } = options;
+  if (typeof slideXml !== 'string') {
+    return { slide_dimensions: null, shapes: [], shape_count: 0, text_nodes: [], total_text_nodes: 0, truncated: false };
   }
 
-  const dimMatch = xmlString.match(/<a:ext\s+cx="(\d+)"\s+cy="(\d+)"/i);
-  const slide_dimensions = dimMatch ? {
-    width_emu: parseInt(dimMatch[1], 10),
-    height_emu: parseInt(dimMatch[2], 10),
-    width_cm: parseFloat((parseInt(dimMatch[1], 10) / 360000).toFixed(2)),
-    height_cm: parseFloat((parseInt(dimMatch[2], 10) / 360000).toFixed(2)),
-  } : { width_cm: 90.0, height_cm: 120.0 };
+  let slide_dimensions = null;
+  const szXml = (typeof presentationXml === 'string' && presentationXml) || (slideXml.includes('<p:sldSz') ? slideXml : null);
+  if (szXml) {
+    const sldSzMatch = szXml.match(/<p:sldSz\s+[^>]*cx="(\d+)"\s+cy="(\d+)"/i) ||
+                       szXml.match(/<p:sldSz\s+cx="(\d+)"\s+cy="(\d+)"/i);
+    if (sldSzMatch) {
+      slide_dimensions = {
+        width_emu: parseInt(sldSzMatch[1], 10),
+        height_emu: parseInt(sldSzMatch[2], 10),
+        width_cm: parseFloat((parseInt(sldSzMatch[1], 10) / 360000).toFixed(2)),
+        height_cm: parseFloat((parseInt(sldSzMatch[2], 10) / 360000).toFixed(2)),
+      };
+    }
+  }
 
-  const textMatches = [...xmlString.matchAll(/<a:t>([^<]+)<\/a:t>/gi)];
-  const text_elements = textMatches.map(m => m[1].trim()).filter(Boolean);
+  const textMatches = [...slideXml.matchAll(/<a:t\b[^>]*>([^<]+)<\/a:t>/gi)];
+  const text_nodes = textMatches.map((m) => decodeXmlEntities(m[1].trim())).filter(Boolean);
 
-  const shapeMatches = [...xmlString.matchAll(/<p:sp\b[^>]*>([\s\S]*?)<\/p:sp>/gi)];
-  const shapes = shapeMatches.map((m, idx) => {
+  const shapeMatches = [...slideXml.matchAll(/<p:sp\b[^>]*>([\s\S]*?)<\/p:sp>/gi)];
+  const allShapes = shapeMatches.map((m, idx) => {
     const shapeBody = m[1];
     const nameMatch = shapeBody.match(/name="([^"]+)"/i);
-    const textMatch = shapeBody.match(/<a:t>([^<]+)<\/a:t>/i);
+    const textMatch = shapeBody.match(/<a:t\b[^>]*>([^<]+)<\/a:t>/i);
     const colorMatch = shapeBody.match(/<a:srgbClr\s+val="([^"]+)"/i);
     return {
       id: idx + 1,
-      name: nameMatch ? nameMatch[1] : `Shape ${idx + 1}`,
-      text: textMatch ? textMatch[1] : null,
+      name: nameMatch ? decodeXmlEntities(nameMatch[1]) : `Shape ${idx + 1}`,
+      text: textMatch ? decodeXmlEntities(textMatch[1]) : null,
       color: colorMatch ? colorMatch[1] : null,
     };
   });
 
+  const truncated = typeof maxShapes === 'number' && allShapes.length > maxShapes;
+  const shapes = truncated ? allShapes.slice(0, maxShapes) : allShapes;
+
   return {
     slide_dimensions,
-    shape_count: shapes.length,
-    shapes: shapes.slice(0, 10),
-    total_text_nodes: text_elements.length,
-    sample_texts: text_elements.slice(0, 5),
+    shapes,
+    shape_count: allShapes.length,
+    text_nodes,
+    total_text_nodes: text_nodes.length,
+    truncated,
   };
+}
+
+export function extractEquationSegment(line) {
+  const eqIdx = line.indexOf('=');
+  if (eqIdx === -1) return null;
+
+  let left = line.slice(0, eqIdx);
+  const right = line.slice(eqIdx);
+
+  // 1. Cut at ';' if present before '='
+  const lastSemi = left.lastIndexOf(';');
+  if (lastSemi !== -1) {
+    left = left.slice(lastSemi + 1);
+  }
+
+  // 2. Cut at the last ':' whose prefix does NOT contain an arithmetic operator that connects terms (+ or -)
+  const colons = [...left.matchAll(/:/g)];
+  for (let i = colons.length - 1; i >= 0; i--) {
+    const colIdx = colons[i].index;
+    const prefixBeforeCol = left.slice(0, colIdx);
+    const hasArithmeticInPrefix = /\+|\s+-\s+|\d\s*-\s*\d/.test(prefixBeforeCol);
+    if (!hasArithmeticInPrefix) {
+      left = left.slice(colIdx + 1);
+      break;
+    }
+  }
+
+  return (left + right).trim();
+}
+
+function normalizeLocale(str, locale) {
+  if (locale === 'US') {
+    // US: comma is thousands separator, dot is decimal separator
+    return str.replace(/\b(\d{1,3})(?:,(\d{3}))+\b/g, (m) => m.replace(/,/g, ''));
+  } else {
+    // EU: dot is thousands separator, comma is decimal separator
+    let s = str.replace(/\b(\d{1,3})(?:\.(\d{3}))+\b/g, (m) => m.replace(/\./g, ''));
+    return s.replace(/(\d),(\d{1,4})(?!\d)/g, '$1.$2');
+  }
+}
+
+function evaluateUnitEquation(segment, locale) {
+  const norm = normalizeLocale(segment, locale);
+  const hasNonLinear = /\d\s*(?:cm|mm|px|pt|%)?\s*[x×*\/^]\s*\(?\s*\d/i.test(norm) ||
+                       /\)\s*[x×*\/^]\s*\d/i.test(norm);
+  if (hasNonLinear) return { skip: true };
+
+  const unitMatch = norm.match(/(.+)=\s*(-?[\d.]+)\s*(cm|mm|px|pt|%)(?!\w)/i);
+  if (!unitMatch) return null;
+
+  const leftSide = unitMatch[1];
+  const declared = parseFloat(unitMatch[2]);
+  const unit = unitMatch[3].toLowerCase();
+  const unitPattern = unit === '%' ? '%' : unit;
+
+  const unitRegex = new RegExp(`([+-]?\\s*\\d+(?:\\.\\d+)?)\\s*${unitPattern}(?!\\w)`, 'gi');
+  const terms = [...leftSide.matchAll(unitRegex)];
+  if (terms.length < 2) return null;
+
+  const values = terms.map((m) => parseFloat(m[1].replace(/\s+/g, ''))).filter((v) => !isNaN(v));
+  if (values.length < 2) return null;
+
+  const calculated = values.reduce((sum, v) => sum + v, 0);
+  const diff = Math.abs(calculated - declared);
+  return {
+    ok: diff <= 0.05,
+    calculated,
+    declared,
+    unit,
+  };
+}
+
+function evaluateGeneralEquation(segment, locale) {
+  const norm = normalizeLocale(segment, locale);
+  const hasNonLinear = /\d\s*[x×*\/^]\s*\(?\s*\d/i.test(norm) ||
+                       /\)\s*[x×*\/^]\s*\d/i.test(norm);
+  if (hasNonLinear) return { skip: true };
+  if (/[()]/.test(norm)) return null;
+
+  const eqMatch = norm.match(/(?:^|:\s*)([0-9\s.+-]+)=\s*(-?[\d.]+)\s*$/);
+  if (!eqMatch) return null;
+
+  const leftSide = eqMatch[1].trim();
+  const declared = parseFloat(eqMatch[2]);
+  const terms = [];
+  let currentNum = '';
+  let currentSign = 1;
+  for (let j = 0; j < leftSide.length; j++) {
+    const ch = leftSide[j];
+    if (ch === '+') {
+      if (currentNum) terms.push(currentSign * parseFloat(currentNum));
+      currentNum = '';
+      currentSign = 1;
+    } else if (ch === '-') {
+      if (currentNum) terms.push(currentSign * parseFloat(currentNum));
+      currentNum = '';
+      currentSign = -1;
+    } else if (/[\d.]/.test(ch)) {
+      currentNum += ch;
+    }
+  }
+  if (currentNum) terms.push(currentSign * parseFloat(currentNum));
+
+  if (terms.length >= 2 && terms.every((t) => !isNaN(t))) {
+    const calculated = terms.reduce((a, b) => a + b, 0);
+    const diff = Math.abs(calculated - declared);
+    return {
+      ok: diff <= 0.05,
+      calculated,
+      declared,
+      leftSide,
+    };
+  }
+  return null;
 }
 
 export function runPreflightLinter(planContent) {
@@ -235,72 +528,48 @@ export function runPreflightLinter(planContent) {
     // Skip explanatory lines discussing equations or examples
     if (/\b(?:ej\.|example|e\.g\.|vs\s+total)\b/i.test(line)) continue;
 
-    // Step 1: Remove thousands separator commas (e.g., 1,200 -> 1200, 1,500,000 -> 1500000)
-    let normalized = line.replace(/\b(\d{1,3})(?:,(\d{3}))+\b/g, (m) => m.replace(/,/g, ''));
-    // Step 2: Normalize decimal commas with 1-2 decimal digits only (e.g., 1,5 cm -> 1.5 cm)
-    normalized = normalized.replace(/(\d),(\d{1,2})(?!\d)/g, '$1.$2');
-
-    // Skip lines containing non-linear operators between numbers or after closing parenthesis (*, /, x, ×, ^)
-    // Placed strictly BEFORE Check A to prevent false positive sums on multiplicative formulas
-    const hasNonLinearOp = /\d\s*(?:cm|mm|px|pt|%)?\s*[x×*\/^]\s*\(?\s*\d/i.test(normalized) ||
-                           /\)\s*[x×*\/^]\s*\d/i.test(normalized);
-    if (hasNonLinearOp) {
-      continue;
-    }
+    const segment = extractEquationSegment(line);
+    if (!segment) continue;
 
     // Check A: Unit-based budget equations (e.g., cm, mm, px, pt, %)
-    // Matches: "Card 1 (24.0cm) + gap (1.5cm) + ... = 84.0 cm" or "1.5cm - 0.5cm = 1.0cm"
-    const unitMatch = normalized.match(/(.+)=\s*(-?[\d.]+)\s*(cm|mm|px|pt|%)(?!\w)/i);
-    if (unitMatch) {
-      const leftSide = unitMatch[1];
-      const declared = parseFloat(unitMatch[2]);
-      const unit = unitMatch[3].toLowerCase();
-      const unitPattern = unit === '%' ? '%' : unit;
+    const unitUS = evaluateUnitEquation(segment, 'US');
+    const unitEU = evaluateUnitEquation(segment, 'EU');
 
-      const unitRegex = new RegExp(`([+-]?\\s*\\d+(?:\\.\\d+)?)\\s*${unitPattern}(?!\\w)`, 'gi');
-      const terms = [...leftSide.matchAll(unitRegex)];
-      if (terms.length >= 2) {
-        const values = terms.map(m => parseFloat(m[1].replace(/\s+/g, ''))).filter(v => !isNaN(v));
-        const calculated = values.reduce((sum, v) => sum + v, 0);
-        if (!isNaN(declared) && Math.abs(calculated - declared) > 0.05) {
-          errors.push(`Arithmetic inconsistency in ${unit} budget (line ${i + 1}): calculated sum is ${calculated.toFixed(2)} ${unit}, declared is ${declared.toFixed(2)} ${unit} in '${trimmed}'.`);
+    if (unitUS || unitEU) {
+      if ((unitUS && unitUS.skip) || (unitEU && unitEU.skip)) {
+        continue;
+      }
+      const passUS = unitUS && unitUS.ok;
+      const passEU = unitEU && unitEU.ok;
+      if (passUS || passEU) {
+        if (!passUS && passEU) {
+          warnings.push(`Ambiguous European number format with periods/commas in line ${i + 1} ('${trimmed}') balanced in EU locale.`);
         }
+        continue;
+      } else {
+        const u = (unitUS || unitEU);
+        errors.push(`Arithmetic inconsistency in ${u.unit} budget (line ${i + 1}): calculated sum (${u.calculated.toFixed(2)} ${u.unit}) does not match declared (${u.declared.toFixed(2)} ${u.unit}) in '${trimmed}'.`);
         continue;
       }
     }
 
-    // Check B: Multi-operand arithmetic equations: "Total: 30 + 40 + 20 = 90" or "100 - 30 - 20 = 50"
-    // Skip lines with parenthesized expressions for Check B
-    if (/[()]/.test(normalized)) continue;
+    // Check B: Multi-operand general arithmetic equations
+    const genUS = evaluateGeneralEquation(segment, 'US');
+    const genEU = evaluateGeneralEquation(segment, 'EU');
 
-    const eqMatch = normalized.match(/(?:^|:\s*)([0-9\s.+-]+)=\s*(-?[\d.]+)\s*$/);
-    if (eqMatch) {
-      const leftSide = eqMatch[1].trim();
-      const declared = parseFloat(eqMatch[2]);
-      const terms = [];
-      let currentNum = '';
-      let currentSign = 1;
-      for (let j = 0; j < leftSide.length; j++) {
-        const ch = leftSide[j];
-        if (ch === '+') {
-          if (currentNum) terms.push(currentSign * parseFloat(currentNum));
-          currentNum = '';
-          currentSign = 1;
-        } else if (ch === '-') {
-          if (currentNum) terms.push(currentSign * parseFloat(currentNum));
-          currentNum = '';
-          currentSign = -1;
-        } else if (/[\d.]/.test(ch)) {
-          currentNum += ch;
-        }
+    if (genUS || genEU) {
+      if ((genUS && genUS.skip) || (genEU && genEU.skip)) {
+        continue;
       }
-      if (currentNum) terms.push(currentSign * parseFloat(currentNum));
-
-      if (terms.length >= 2 && terms.every(t => !isNaN(t))) {
-        const calculated = terms.reduce((a, b) => a + b, 0);
-        if (Math.abs(calculated - declared) > 0.05) {
-          errors.push(`Equation error (line ${i + 1}): ${leftSide} = ${declared} (calculated ${calculated.toFixed(2)})`);
+      const passUS = genUS && genUS.ok;
+      const passEU = genEU && genEU.ok;
+      if (passUS || passEU) {
+        if (!passUS && passEU) {
+          warnings.push(`Ambiguous European number format in line ${i + 1} ('${trimmed}') balanced in EU locale.`);
         }
+      } else {
+        const g = (genUS || genEU);
+        errors.push(`Equation error (line ${i + 1}): calculated ${g.calculated} != declared ${g.declared} (LHS: ${g.leftSide}) in '${trimmed}'.`);
       }
     }
   }
@@ -353,69 +622,61 @@ export function killProcessTree(pid) {
         process.kill(pid, 'SIGKILL');
       }
     }
-  } catch (err) {
-    // Process might already be dead
+  } catch {
+    // Process already exited
   }
 }
 
-export function executeReviewerAsync({ bin, args, prompt, env, stdin = true, timeout = 120000 }) {
-  return new Promise((resolve) => {
-    // Security Invariant: Prohibit Windows batch shims (.cmd/.bat) to eliminate cmd.exe argument injection vulnerabilities
-    if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(bin)) {
-      return resolve({
+export async function executeReviewerAsync({ bin, args = [], prompt, env = process.env, stdin = true, timeout = 600000 }) {
+  // Proactively reject Windows batch shims (.cmd, .bat) to prevent cmd.exe command injection
+  if (process.platform === 'win32') {
+    const lowerBin = (bin || '').toLowerCase();
+    if (lowerBin.endsWith('.cmd') || lowerBin.endsWith('.bat')) {
+      const errMessage = `[SECURITY ERROR] Windows batch shims (.cmd/.bat) are rejected to prevent cmd.exe command injection. Install native binary or use native launcher.`;
+      console.error(`\n❌ ${errMessage}`);
+      return {
         status: 1,
         stdout: '',
-        stderr: 'Windows batch shims (.cmd/.bat) are not supported for safety; install the native binary or point AGY_BIN_PATH to an .exe',
+        stderr: errMessage,
         timedOut: false,
-      });
+      };
     }
+  }
 
+  return new Promise((resolve) => {
     let stdoutData = '';
     let stderrData = '';
     let timedOut = false;
     let timer = null;
+    let graceTimer = null;
+    let settled = false;
 
-    const spawnArgs = stdin ? args : (args.includes(prompt) ? args : [...args, prompt]);
-
-    const child = spawn(bin, spawnArgs, {
+    const child = spawn(bin, args, {
+      env,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: env || process.env,
-      windowsHide: true,
       detached: process.platform !== 'win32',
+      windowsHide: true,
     });
 
-    // Multibyte-safe UTF-8 decoding on child streams (prevents U+FFFD on chunk boundary cuts)
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-
-    const sigHandler = (sig) => {
-      if (timer) clearTimeout(timer);
-      cleanupSignals();
-      if (child.pid) killProcessTree(child.pid);
-      process.exit(sig === 'SIGINT' ? 130 : 143);
+    const cleanupSignals = () => {
+      process.removeListener('SIGINT', onSigInt);
+      process.removeListener('SIGTERM', onSigTerm);
     };
 
-    process.once('SIGINT', sigHandler);
-    process.once('SIGTERM', sigHandler);
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (graceTimer) clearTimeout(graceTimer);
+      cleanupSignals();
+      try { child.stdout?.destroy(); } catch (_) {}
+      try { child.stderr?.destroy(); } catch (_) {}
+      try { child.stdin?.destroy(); } catch (_) {}
+      resolve(result);
+    };
 
-    function cleanupSignals() {
-      process.removeListener('SIGINT', sigHandler);
-      process.removeListener('SIGTERM', sigHandler);
-    }
-
-    if (timeout && timeout > 0) {
-      timer = setTimeout(() => {
-        timedOut = true;
-        cleanupSignals();
-        killProcessTree(child.pid);
-        resolve({
-          status: 124,
-          stdout: stdoutData,
-          stderr: stderrData + '\nError: Execution timed out',
-          timedOut: true,
-        });
-      }, timeout);
-    }
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
 
     child.stdout.on('data', (chunk) => {
       stdoutData += chunk;
@@ -425,10 +686,37 @@ export function executeReviewerAsync({ bin, args, prompt, env, stdin = true, tim
       stderrData += chunk;
     });
 
+    if (timeout && timeout > 0) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        killProcessTree(child.pid);
+        graceTimer = setTimeout(() => {
+          finish({
+            status: 124,
+            signal: null,
+            stdout: stdoutData,
+            stderr: stderrData + '\n[runner] Execution timed out; stdio streams closed after grace period.',
+            timedOut: true,
+          });
+        }, 1500);
+      }, timeout);
+    }
+
+    const onSigInt = () => {
+      killProcessTree(child.pid);
+      process.exit(130);
+    };
+
+    const onSigTerm = () => {
+      killProcessTree(child.pid);
+      process.exit(143);
+    };
+
+    process.once('SIGINT', onSigInt);
+    process.once('SIGTERM', onSigTerm);
+
     child.on('error', (err) => {
-      if (timer) clearTimeout(timer);
-      cleanupSignals();
-      resolve({
+      finish({
         status: 1,
         stdout: stdoutData,
         stderr: stderrData + '\n' + err.message,
@@ -437,15 +725,15 @@ export function executeReviewerAsync({ bin, args, prompt, env, stdin = true, tim
     });
 
     child.on('close', (code, signal) => {
-      if (timer) clearTimeout(timer);
-      cleanupSignals();
-      const exitCode = code !== null ? code : (signal ? 128 : 1);
-      resolve({
+      const isAgyPrintTimeout = /print timeout after/i.test(stderrData);
+      const effectiveTimedOut = timedOut || isAgyPrintTimeout;
+      const exitCode = effectiveTimedOut ? 124 : (code !== null ? code : (signal ? 128 : 1));
+      finish({
         status: exitCode,
         signal: signal || null,
         stdout: stdoutData,
         stderr: stderrData,
-        timedOut,
+        timedOut: effectiveTimedOut,
       });
     });
 
@@ -455,24 +743,24 @@ export function executeReviewerAsync({ bin, args, prompt, env, stdin = true, tim
     });
 
     if (stdin) {
-      if (!child.stdin.destroyed) {
-        child.stdin.write(Buffer.from(prompt, 'utf-8'), (err) => {
-          if (!err && !child.stdin.destroyed) {
-            child.stdin.end();
-          }
-        });
-      }
+      try {
+        if (!child.stdin.destroyed) {
+          child.stdin.end(Buffer.from(prompt, 'utf-8'));
+        }
+      } catch (_) {}
     } else {
-      if (!child.stdin.destroyed) {
-        child.stdin.end();
-      }
+      try {
+        if (!child.stdin.destroyed) {
+          child.stdin.end();
+        }
+      } catch (_) {}
     }
   });
 }
 
 export function printUsage() {
   console.log(`
-🌀 Claudegravity Loop Runner v1.1.0
+🌀 Claudegravity Loop Runner v${PKG_VERSION}
 
 Usage:
   node scripts/runner.mjs review [options]
@@ -485,10 +773,14 @@ Options:
   --model <name>           Model override for the reviewer (e.g., 'sonnet', 'opus')
   --fallback-model <name>  Custom fallback model if primary fails with rate/policy limits
   --auto-fallback          Automatically fallback upon policy/rate limits
+  --fallback-on-timeout    Allow execution timeout to trigger model fallback
   --insecure-tls           Opt-in TLS bypass for corporate/local proxies (Warning logged)
   --track <type>           Phase 3 track: 'code', 'artifact', or 'auto' (default: auto)
-  --timeout <ms>           Execution timeout per round in ms (default: 120000)
+  --timeout <ms>           Execution timeout per round in ms (default: 600000)
   --no-stdin               Pass prompt as argv instead of streaming via stdin pipe
+  --skip-lint              Proceed with review even if pre-flight linter detects inconsistencies
+  --help, -h               Show this usage guide
+  --version, -v            Show runner version
 `);
 }
 
@@ -500,8 +792,14 @@ export function runPreflight(options = {}) {
   const agyOk = existsSync(agy) || spawnSync(agy, ['--version'], { encoding: 'utf-8' }).status === 0;
   const claudeOk = existsSync(claude) || spawnSync(claude, ['--version'], { encoding: 'utf-8' }).status === 0;
 
-  console.log(`  Antigravity CLI (agy):  ${agyOk ? '✅ Available' : '⚠️ Not found'} (${agy})`);
-  console.log(`  Claude Code CLI:        ${claudeOk ? '✅ Available' : '⚠️ Not found'} (${claude})`);
+  const agyIsShim = isWindowsShim(agy);
+  const claudeIsShim = isWindowsShim(claude);
+
+  const agyStatus = agyOk ? (agyIsShim ? '⚠️ NPM shim detected (Native .exe recommended)' : '✅ Available') : '⚠️ Not found';
+  const claudeStatus = claudeOk ? (claudeIsShim ? '⚠️ NPM shim detected (Native .exe recommended)' : '✅ Available') : '⚠️ Not found';
+
+  console.log(`  Antigravity CLI (agy):  ${agyStatus} (${agy})`);
+  console.log(`  Claude Code CLI:        ${claudeStatus} (${claude})`);
   console.log(`  Node.js Platform:       ${process.platform} (${process.arch})`);
   console.log(`  Default TLS Invariant:  Strictly Active (Secure by Default)`);
 
@@ -535,15 +833,24 @@ export async function runReview(options) {
   console.log('🔍 Running Pre-flight Consistency Linter on plan...');
   const lintResult = runPreflightLinter(planContent);
   if (!lintResult.ok) {
-    console.error('❌ Pre-flight Linter detected inconsistencies before invoking reviewer:');
-    lintResult.errors.forEach((err) => console.error(`  - ${err}`));
-    console.error('\nPlease fix these mathematical/structural issues in PLAN.md before requesting rival review.');
-    process.exit(4);
+    if (options.skipLint) {
+      console.warn('⚠️ [SKIP-LINT] Pre-flight Linter detected inconsistencies but proceeding via --skip-lint:');
+      lintResult.errors.forEach((err) => console.warn(`  ⚠️ ${err}`));
+    } else {
+      console.error('❌ Pre-flight Linter detected inconsistencies before invoking reviewer:');
+      lintResult.errors.forEach((err) => console.error(`  - ${err}`));
+      console.error('\nPlease fix these mathematical/structural issues in PLAN.md before requesting rival review (or use --skip-lint).');
+      process.exit(4);
+    }
   }
   if (lintResult.warnings.length > 0) {
     lintResult.warnings.forEach((warn) => console.warn(`  ⚠️ Warning: ${warn}`));
   }
-  console.log('✅ Pre-flight Linter passed successfully.');
+  if (!lintResult.ok && options.skipLint) {
+    console.log('⚠️ Pre-flight Linter bypassed via --skip-lint.');
+  } else {
+    console.log('✅ Pre-flight Linter passed successfully.');
+  }
 
   // Step 2: Track Detection
   const track = detectTrack(planContent, options.track);
@@ -586,6 +893,8 @@ ${planContent}
       if (forModel) {
         args.push('--model', forModel);
       }
+      const agyTimeoutSec = Math.max(30, Math.floor(options.timeout / 1000) - 15);
+      args.push('--print-timeout', `${agyTimeoutSec}s`);
       if (!options.stdin) {
         args.push('-p', prompt);
       }
@@ -624,6 +933,7 @@ ${planContent}
     autoFallback: options.autoFallback,
     timedOut: res.timedOut,
     fallbackModel: options.fallbackModel,
+    fallbackOnTimeout: options.fallbackOnTimeout,
   });
 
   let usedModel = currentModel || '(Default CLI model)';
@@ -656,6 +966,9 @@ ${planContent}
   if (options.log) {
     const logPath = resolve(process.cwd(), options.log);
     let logEntry = `\n--- [${new Date().toISOString()}] Review Round (Host: ${options.host}, Reviewer: ${reviewer}, Model: ${usedModel}) ---\n`;
+    if (options.skipLint && !lintResult.ok) {
+      logEntry += `--- Pre-flight Linter Bypassed via --skip-lint ---\nSuppressed Errors:\n${lintResult.errors.map((e) => `  - ${e}`).join('\n')}\n\n`;
+    }
     if (priorAttemptOutput) {
       logEntry += `--- Prior Failed Attempt ---\n${priorAttemptOutput}\n--- Fallback Response ---\n`;
     }
@@ -703,8 +1016,13 @@ if (isDirectExecution) {
       await runReview(opts);
       break;
     case 'help':
-    default:
       printUsage();
+      process.exit(0);
+      break;
+    default:
+      console.error(`❌ Error: Unknown command '${opts.command}'.`);
+      printUsage();
+      process.exit(1);
       break;
   }
 }

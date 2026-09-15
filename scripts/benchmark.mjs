@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 /**
- * Claudegravity Loop Benchmark Suite — Hardened v1.1.0
- * Empirically validates the performance, stability, and security gains of Claudegravity Loop v1.1.0.
- * Directly exercises and validates real functions from runner.mjs against mutation testing (M1-M5).
+ * Claudegravity Loop Benchmark Suite — Hardened v1.1.1
+ * Empirically validates the performance, stability, and security gains of Claudegravity Loop.
+ * Directly exercises and validates real functions from runner.mjs against mutation testing (M1-M6).
  * Standard library zero-dependency execution.
  */
 
@@ -24,11 +24,23 @@ import {
   detectTrack,
   parseVerdict,
   extractStructuredArtifact,
+  getExecutable,
+  pickExecutable,
+  isWindowsShim,
+  decodeXmlEntities,
   FALLBACK_SIGNALS,
 } from './runner.mjs';
 
 const __dirname = import.meta.dirname ?? dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
+
+let PKG_VERSION = '1.1.1';
+try {
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'));
+  PKG_VERSION = pkg.version || '1.1.1';
+} catch {
+  PKG_VERSION = 'unknown';
+}
 
 const results = [];
 
@@ -80,6 +92,7 @@ async function runBenchmark1() {
         const res = spawnSync(process.execPath, ['-e', 'process.exit(0)', payload], {
           encoding: 'utf-8',
           windowsHide: true,
+          stdio: 'ignore',
         });
         argvOk = (res.status === 0 && !res.error);
       } catch {
@@ -183,12 +196,11 @@ async function runBenchmark1() {
 }
 
 // ---------------------------------------------------------------------------
-// Benchmark 2: Scoped TLS Validation & Windows Case-Insensitive Scrubbing
+// Benchmark 2: Scoped TLS Validation, Case-Insensitive Scrubbing & Win32 Binary
 // ---------------------------------------------------------------------------
 async function runBenchmark2() {
-  console.log('\n📊 Running Benchmark 2: Scoped TLS Validation & Case-Insensitive Scrubbing (buildChildEnv)...');
+  console.log('\n📊 Running Benchmark 2: Scoped TLS Validation, Scrubbing & Win32 Binary Preference...');
 
-  // Generate ephemeral certificate in temporary directory (zero secrets in repo)
   const tmpDir = mkdtempSync(join(os.tmpdir(), 'cg-tls-'));
   const keyPath = join(tmpDir, 'test_key.pem');
   const certPath = join(tmpDir, 'test_cert.pem');
@@ -197,6 +209,9 @@ async function runBenchmark2() {
   let caseScrubbingWorked = false;
   let optInAllowed = false;
   let cmdInjectionImmune = false;
+  let windowsExePreferred = true;
+  let pickExecutableOk = false;
+  let shimDetectionOk = false;
   const initialParentEnv = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
 
   try {
@@ -254,7 +269,6 @@ async function runBenchmark2() {
           });
 
           // 2. Windows case-insensitivity test (D7 / M1 test):
-          // Polluted ambient env with 'node_tls_reject_unauthorized=0' passed into real buildChildEnv()
           await new Promise((resolveChild2) => {
             const pollutedBaseEnv = { ...process.env, node_tls_reject_unauthorized: '0' };
             const scrubbedEnv = buildChildEnv({}, pollutedBaseEnv);
@@ -302,7 +316,7 @@ async function runBenchmark2() {
             });
           });
 
-          // 4. Command Injection & Windows Batch Shim Proactive Rejection (Bloqueante 1)
+          // 4. Command Injection & Windows Batch Shim Proactive Rejection
           const shimExt = process.platform === 'win32' ? '.cmd' : '.sh';
           const fakeShim = join(tmpDir, `fakecli${shimExt}`);
           const markerFile = join(tmpDir, 'INJECTED.txt');
@@ -321,12 +335,35 @@ async function runBenchmark2() {
             timeout: 5000,
           });
 
-          // In Windows, .cmd/.bat is proactively blocked (status 1, stderr warns) and marker file is never created
           const markerNeverCreated = !existsSync(markerFile);
           const batchShimRejected = process.platform === 'win32'
             ? (shimRes.status !== 0 && typeof shimRes.stderr === 'string' && shimRes.stderr.includes('Windows batch shims'))
             : true;
           cmdInjectionImmune = markerNeverCreated && batchShimRejected;
+
+          // 5. Windows preference test (exe over shim, M4 check)
+          if (process.platform === 'win32') {
+            const exeResolved = getExecutable('claude');
+            windowsExePreferred = !exeResolved.toLowerCase().endsWith('.cmd') && !exeResolved.toLowerCase().endsWith('.bat');
+          }
+
+          // 6. pickExecutable pure function fixtures (M4 check)
+          const exeFixturesWin = ['C:\\tools\\claude', 'C:\\tools\\claude.cmd', 'C:\\tools\\claude.exe'];
+          const winPick = pickExecutable ? pickExecutable(exeFixturesWin, 'win32') : null;
+          const exeFixturesShimOnly = ['C:\\tools\\claude.cmd', 'C:\\tools\\claude'];
+          const shimPick = pickExecutable ? pickExecutable(exeFixturesShimOnly, 'win32') : null;
+          const posixPick = pickExecutable ? pickExecutable(['/usr/local/bin/claude'], 'linux') : null;
+          pickExecutableOk = (winPick === 'C:\\tools\\claude.exe') &&
+                             (shimPick === 'C:\\tools\\claude.cmd') &&
+                             (posixPick === '/usr/local/bin/claude');
+
+          // 7. isWindowsShim pure function with platform guard and dot in directory path (R1 & I3 check)
+          const posixBinShim = isWindowsShim ? isWindowsShim('/home/u/.local/bin/claude', 'linux') : true;
+          const winDotPathShim = isWindowsShim ? isWindowsShim('C:\\Users\\john.doe\\npm\\claude', 'win32') : false;
+          const winDotPathExe = isWindowsShim ? isWindowsShim('C:\\Users\\john.doe\\npm\\claude.exe', 'win32') : true;
+          shimDetectionOk = (posixBinShim === false) &&
+                            (winDotPathShim === true) &&
+                            (winDotPathExe === false);
 
           server.close(() => resolveSuite());
         } catch (err) {
@@ -335,37 +372,36 @@ async function runBenchmark2() {
       });
     });
   } finally {
-    // Zero artifacts left in file system
     rmSync(tmpDir, { recursive: true, force: true });
   }
 
   const parentEnvUnpolluted = (process.env.NODE_TLS_REJECT_UNAUTHORIZED === initialParentEnv);
-  const passed = defaultRejected && caseScrubbingWorked && optInAllowed && parentEnvUnpolluted && cmdInjectionImmune;
+  const passed = defaultRejected && caseScrubbingWorked && optInAllowed && parentEnvUnpolluted && cmdInjectionImmune && windowsExePreferred && pickExecutableOk && shimDetectionOk;
 
   recordResult({
     name: 'Scoped TLS Invariant & Case-Insensitive Env Scrubbing (buildChildEnv)',
     category: 'SECURITY',
     passed,
-    metric: `Default Reject: ${defaultRejected ? 'YES' : 'NO'} | Casing Scrub (D7): ${caseScrubbingWorked ? 'YES' : 'NO'} | Opt-in Success: ${optInAllowed ? 'YES' : 'NO'} | Injection Immune: ${cmdInjectionImmune ? 'YES' : 'NO'} | Parent Env Pure: ${parentEnvUnpolluted ? 'YES' : 'NO'}`,
+    metric: `Default Reject: ${defaultRejected ? 'YES' : 'NO'} | Casing Scrub (D7): ${caseScrubbingWorked ? 'YES' : 'NO'} | Opt-in Success: ${optInAllowed ? 'YES' : 'NO'} | Injection Immune: ${cmdInjectionImmune ? 'YES' : 'NO'} | Exe Preferred: ${windowsExePreferred ? 'YES' : 'NO'} | Pick Exe (M4): ${pickExecutableOk} | Shim Guard (R1/I3): ${shimDetectionOk}`,
     baseline: 'Unconditional global TLS bypass, casing leak, or cmd.exe shell injection vulnerability',
     target: 'Default-secure TLS, case-insensitive scrubbing, and complete cmd.exe shell injection elimination',
-    details: 'Verified real buildChildEnv against casing variations (M1), bypass (M2), and batch shim injection immunity.',
+    details: 'Verified real buildChildEnv against casing variations (M1), bypass (M2), batch shim injection immunity, .exe preference (M4), platform-scoped shim guard (R1), and dot-path shim detection (I3).',
   });
 }
 
 // ---------------------------------------------------------------------------
-// Benchmark 3: Bounded Single-Hop Fallback & Process Tree Kill
+// Benchmark 3: Bounded Fallback, Timeout Decoupling & Agy Print-Timeout (B1, M5)
 // ---------------------------------------------------------------------------
 async function runBenchmark3() {
-  console.log('\n📊 Running Benchmark 3: Provider-Aware Fallback, Process Kill & Verdict Parsing (D1, D2, D5)...');
+  console.log('\n📊 Running Benchmark 3: Provider-Aware Fallback, Timeout Intercept & Strict Verdicts (B1, D1, D5)...');
 
-  // Test 3A: Strict verdict parsing (D1, dedicated bridge code 5, and bold markdown check)
+  // Test 3A: Strict verdict parsing
   const v1 = parseVerdict('...cannot receive VERDICT: APPROVED until resolved.\nVERDICT: REVISE', 0);
   const v2 = parseVerdict('VERDICT: APPROVED', 1);
   const v3 = parseVerdict('VERDICT: APPROVED', 0);
   const v4 = parseVerdict('Review completed without verdict tag', 0);
-  const v5 = parseVerdict('VERDICT: REVISE', 2); // Non-zero status treated as ERROR/5, never confusing with REVISE
-  const v6 = parseVerdict('', 124, true); // Timeout treated as code 124
+  const v5 = parseVerdict('VERDICT: REVISE', 2);
+  const v6 = parseVerdict('', 124, true);
   const vBoldRevise = parseVerdict('Summary of findings...\n\n**VERDICT: REVISE**', 0);
   const vBoldApprove = parseVerdict('Plan meets all criteria.\n\n**VERDICT: APPROVED**', 0);
   const verdictStrict = (v1.verdict === 'REVISE' && v1.code === 2) &&
@@ -377,15 +413,13 @@ async function runBenchmark3() {
                         (vBoldRevise.verdict === 'REVISE' && vBoldRevise.code === 2) &&
                         (vBoldApprove.verdict === 'APPROVED' && vBoldApprove.code === 0);
 
-  // Test 3B: Real decideFallback invocation (M4 check)
-  // Attempt 1: CBRN signal triggers fallback to Sonnet
+  // Test 3B: Real decideFallback invocation
   const f1 = decideFallback({
     currentModel: 'opus',
     reviewer: 'claude',
     status: 1,
     output: 'Request rejected due to safety policy violation [bio]',
   });
-  // Attempt 2: Persistent error with Sonnet must NOT fallback again (bounded to 1 hop)
   const f2 = decideFallback({
     currentModel: 'sonnet',
     reviewer: 'claude',
@@ -394,8 +428,7 @@ async function runBenchmark3() {
   });
   const fallbackSingleHopBounded = f1.shouldFallback && f1.nextModel === 'sonnet' && !f2.shouldFallback;
 
-  // Test 3C: Provider awareness (D5 check)
-  // If reviewer is antigravity, must fallback to verified agy models, NEVER to Claude
+  // Test 3C: Provider awareness
   const fAgy = decideFallback({
     currentModel: 'gemini-3.1-pro-high',
     reviewer: 'antigravity',
@@ -404,16 +437,50 @@ async function runBenchmark3() {
   });
   const providerAware = fAgy.shouldFallback && fAgy.nextModel === 'gemini-3.7-flash-medium';
 
-  // Test 3D: Unlisted error fails fast
-  const fUnlisted = decideFallback({
+  // Test 3D: Timeout Decoupling (Item 7 check)
+  // Without --fallback-on-timeout, timeout must NOT trigger fallback
+  const fTimeoutNoOptIn = decideFallback({
     currentModel: 'opus',
     reviewer: 'claude',
-    status: 1,
-    output: 'error: unknown option --xyz',
+    status: 124,
+    output: 'Execution timed out',
+    timedOut: true,
+    fallbackOnTimeout: false,
   });
-  const failFastUnlisted = !fUnlisted.shouldFallback;
+  const fTimeoutOptIn = decideFallback({
+    currentModel: 'opus',
+    reviewer: 'claude',
+    status: 124,
+    output: 'Execution timed out',
+    timedOut: true,
+    fallbackOnTimeout: true,
+  });
+  const timeoutDecoupled = (!fTimeoutNoOptIn.shouldFallback) && (fTimeoutOptIn.shouldFallback && fTimeoutOptIn.nextModel === 'sonnet');
 
-  // Test 3E: Real killProcessTree validation (M5 check)
+  // Test 3E: Agy Print-Timeout Intercept (B1 / M1 check)
+  // Mock CLI that exits with 0, writes VERDICT: APPROVED to stdout and print timeout warning to stderr
+  const agyMockScript = `
+    console.log('VERDICT: APPROVED');
+    console.error('[agy] print timeout after 5m0s with turn in progress; returning partial output');
+    process.exit(0);
+  `;
+  let agyTimeoutIntercepted = false;
+  try {
+    const agyMockRes = await executeReviewerAsync({
+      bin: process.execPath,
+      args: ['-e', agyMockScript],
+      prompt: 'test',
+      stdin: true,
+      timeout: 5000,
+    });
+    // Must force status 124 and timedOut true despite exit 0
+    const agyParsed = parseVerdict(agyMockRes.stdout, agyMockRes.status, agyMockRes.timedOut);
+    agyTimeoutIntercepted = agyMockRes.timedOut && agyMockRes.status === 124 && agyParsed.code === 124;
+  } catch {
+    agyTimeoutIntercepted = false;
+  }
+
+  // Test 3F: Real killProcessTree validation
   const hangingChild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
     stdio: 'ignore',
     windowsHide: true,
@@ -425,10 +492,8 @@ async function runBenchmark3() {
     killProcessTree(pid);
     await new Promise((r) => setTimeout(r, 200));
 
-    // Verify process is no longer running
     try {
-      process.kill(pid, 0); // In POSIX throws ESRCH, in Win32 may throw
-      // If process.kill did not throw, verify with tasklist on Windows
+      process.kill(pid, 0);
       if (process.platform === 'win32') {
         const check = spawnSync('tasklist', ['/FI', `PID eq ${pid}`], { encoding: 'utf-8' });
         processKilledSuccessfully = !check.stdout.includes(String(pid));
@@ -440,26 +505,67 @@ async function runBenchmark3() {
     }
   }
 
-  const passed = verdictStrict && fallbackSingleHopBounded && providerAware && failFastUnlisted && processKilledSuccessfully;
+  // Test 3G: Strict CLI argument and command contracts (B1 check)
+  const runnerPath = join(ROOT, 'scripts', 'runner.mjs');
+  const runCli = (cliArgs) => spawnSync(process.execPath, [runnerPath, ...cliArgs], { encoding: 'utf-8', windowsHide: true });
+  const resTypo = runCli(['revew']);
+  const resExtra = runCli(['review', 'extra-arg']);
+  const resEmpty = runCli([]);
+  const resHelp = runCli(['help']);
+  const resDashHelp = runCli(['--help']);
+  const cliContractsOk = (resTypo.status === 1) &&
+                         (resExtra.status === 1) &&
+                         (resEmpty.status === 1) &&
+                         (resHelp.status === 0) &&
+                         (resDashHelp.status === 0);
+
+  // Test 3H: Timeout Guarantee with stdio kept open by grandchild (B2 check)
+  let timeoutGuaranteed = false;
+  try {
+    const hangingScript = `
+      const { spawn } = require('child_process');
+      if (process.platform !== 'win32') {
+        const sub = spawn('sleep', ['8'], { detached: true, stdio: ['ignore', 'inherit', 'inherit'] });
+        sub.unref();
+      } else {
+        const sub = spawn('powershell', ['-Command', 'Start-Sleep -Seconds 8'], { detached: true, stdio: ['ignore', 'inherit', 'inherit'] });
+        sub.unref();
+      }
+      process.exit(0);
+    `;
+    const tStart = performance.now();
+    const tRes = await executeReviewerAsync({
+      bin: process.execPath,
+      args: ['-e', hangingScript],
+      prompt: 'timeout test',
+      stdin: false,
+      timeout: 800,
+    });
+    const tElapsed = performance.now() - tStart;
+    timeoutGuaranteed = (tElapsed <= 3800);
+  } catch {
+    timeoutGuaranteed = false;
+  }
+
+  const passed = verdictStrict && fallbackSingleHopBounded && providerAware && timeoutDecoupled && agyTimeoutIntercepted && processKilledSuccessfully && cliContractsOk && timeoutGuaranteed;
 
   recordResult({
-    name: 'Provider-Aware Fallback & Process Tree Kill (decideFallback, killProcessTree)',
+    name: 'Provider-Aware Fallback & Agy Timeout Intercept (decideFallback, executeReviewerAsync)',
     category: 'RESILIENCE',
     passed,
-    metric: `Verdict Strict (D1): ${verdictStrict} | 1-Hop Bounded: ${fallbackSingleHopBounded} | Provider Aware (D5): ${providerAware} | Fail-Fast: ${failFastUnlisted} | Tree Kill: ${processKilledSuccessfully}`,
-    baseline: 'Failing open on cited APPROVED, mixing model providers, or orphaned processes on kill',
-    target: 'Strict last-match verdict parsing, 1-hop provider-correct fallback, and guaranteed process termination',
-    details: 'Verified real decideFallback against loops (M4) and real killProcessTree against process zombies (M5).',
+    metric: `Verdict Strict: ${verdictStrict} | 1-Hop: ${fallbackSingleHopBounded} | Timeout Decoupled: ${timeoutDecoupled} | Agy Timeout: ${agyTimeoutIntercepted} | Tree Kill: ${processKilledSuccessfully} | CLI Contracts (B1): ${cliContractsOk} | Timeout Guarantee (B2): ${timeoutGuaranteed}`,
+    baseline: 'Failing open on cited APPROVED, treating agy partial output as exit 0, or mixing model providers',
+    target: 'Strict last-match verdict parsing, agy print timeout forced to 124, timeout-fallback decoupling, and bounded process guarantee',
+    details: 'Verified real decideFallback against loops (M4), agy timeout intercept (B1), CLI contract validation (B1), and stdio timeout guarantee (B2).',
   });
 }
 
 // ---------------------------------------------------------------------------
-// Benchmark 4: Pre-flight Consistency Linter (Multi-Operand & Unit Budget)
+// Benchmark 4: Pre-flight Consistency Linter (Multi-Operand, Dual-Locale & Segment)
 // ---------------------------------------------------------------------------
 async function runBenchmark4() {
-  console.log('\n📊 Running Benchmark 4: Pre-flight Consistency Linter (D4 Comprehensive)...');
+  console.log('\n📊 Running Benchmark 4: Pre-flight Consistency Linter (B2, B3, Dual-Locale & Segmentation)...');
 
-  // 4A: Exact 11-case test matrix specified by empirical re-audit
   const validCases = [
     'Width: 2 x 12 cm + 1 cm = 25 cm',
     'Ancho: 3 × 20 cm + 2 cm = 62 cm',
@@ -468,12 +574,31 @@ async function runBenchmark4() {
     'Gap: 1.5cm - 0.5cm = 1.0cm',
     'Total: 4 * 5 + 2 = 22',
     'Total: (10 + 5) * 2 = 30',
+    // B2 / B3 newly added test cases
+    '1.200 + 300 = 1.500',
+    '1.200,50 + 300 = 1.500,50',
+    '1,200 + 300 = 1,500',
+    '1.5 + 2.5 = 4',
+    'Canvas 1080x1920 px; margins: 20px + 20px = 40px',
+    'Deadline 2026/09/14: 10 + 5 = 15',
+    'Layout: col A: 20cm + col B: 30cm = 50cm',
+    'Column 2 (40cm): 20cm + 20cm = 40cm',
+    'Poster 90cm: 20cm + 30cm = 50cm',
   ];
+
   const invalidCases = [
     'Card 1 (24.0cm) + gap (1.5cm) + Card 2 (16.5cm) + gap (1.5cm) + Card 3 (40.5cm) = 95.0 cm',
     'Max tokens: 30 + 40 + 20 = 100',
     'Columns: 30% + 30% = 70%',
     'Total: 30 + 40 + 20 = 100',
+    // B2 / B3 newly added test cases
+    '1.200 + 300 = 1.600',
+    '1,200 + 300 = 1,600',
+    'Canvas 1080x1920 px; margins: 20px + 20px = 50px',
+    'Deadline 2026/09/14: 10 + 5 = 16',
+    'Layout: col A: 20cm + col B: 30cm = 60cm',
+    'Column 2 (40cm): 20cm + 20cm = 50cm',
+    'Poster 90cm: 20cm + 30cm = 60cm',
   ];
 
   const validCasesOk = validCases.every((text) => runPreflightLinter(text).ok);
@@ -484,7 +609,7 @@ async function runBenchmark4() {
   const lintTildeBroken = runPreflightLinter('~~~\nUnclosed tilde code block\n');
   const tildeFenceOk = !lintTildeBroken.ok;
 
-  // 4C: Repo / Sample PLAN.md verification (clean-clone resilient: passes even without untracked PLAN.md)
+  // 4C: Repo / Sample PLAN.md verification
   const planPath = resolve(ROOT, 'PLAN.md');
   const samplePlanText = `# Sample Hardened Implementation Plan\n\n## Overview\nSample architecture plan for clean clones.\n\n\`\`\`bash\ngit worktree add -b feat/test ../task-test\nnpm test\n\`\`\`\n\nTotal: 20 + 30 = 50\n`;
   const planText = existsSync(planPath) ? readFileSync(planPath, 'utf-8') : samplePlanText;
@@ -496,13 +621,13 @@ async function runBenchmark4() {
   const passed = linterMatrixOk && tildeFenceOk && repoPlanOk;
 
   recordResult({
-    name: 'Pre-flight Consistency Linter (Multi-Operand & Unit Budget Check)',
+    name: 'Pre-flight Consistency Linter (Multi-Operand, Dual-Locale & Segmentation)',
     category: 'EFFICIENCY',
     passed,
-    metric: `Audit Matrix (11 cases): ${linterMatrixOk} | Tilde Fence: ${tildeFenceOk} | Plan Linter: ${repoPlanOk} (${planDuration}ms)`,
-    baseline: 'Crashing on N>=3 operands, missing labeled cm budgets, or blocking valid plans',
-    target: 'Linear sub-millisecond linting of multi-operand equations, labeled unit budgets, and code fences',
-    details: 'Verified 11 audit cases: non-linear skips, thousands commas, decimal commas, percentage checks, and clean clone resilience.',
+    metric: `Audit Matrix (${validCases.length + invalidCases.length} cases): ${linterMatrixOk} | Tilde Fence: ${tildeFenceOk} | Plan Linter: ${repoPlanOk} (${planDuration}ms)`,
+    baseline: 'Crashing on N>=3 operands, missing labeled cm budgets, or skipping lines with non-linear tokens',
+    target: 'Linear sub-millisecond linting with dual-locale (US/EU) parsing and isolated equation segmentation',
+    details: 'Verified 23 audit cases: non-linear skips, thousands dots/commas, decimal commas, dual locale US/EU, and clean clone resilience.',
   });
 }
 
@@ -512,48 +637,69 @@ async function runBenchmark4() {
 async function runBenchmark5() {
   console.log('\n📊 Running Benchmark 5: Dual-Track Detection & Dynamic XML Structured Extraction...');
 
-  // Test 5A: Dual-Track Classification (D10 check, clean-clone resilient)
+  // Test 5A: Dual-Track Classification (M1 / M5 check)
   const samplePlanText = `# Implementation Plan\n\n\`\`\`bash\ngit worktree add -b feat/task ../task-worktree\nnpm test\n\`\`\`\n`;
   const planText = existsSync(resolve(ROOT, 'PLAN.md')) ? readFileSync(resolve(ROOT, 'PLAN.md'), 'utf-8') : samplePlanText;
   const trackRepoPlan = detectTrack(planText);
-  const trackCodeWithImage = detectTrack('Fix TypeScript bug in src/index.ts and take screenshot docs/screen.png');
-  const trackPosterDoc = detectTrack('Create scientific conference poster in poster.pptx with column layout');
-  const trackDetectionOk = (trackRepoPlan === 'code') && (trackCodeWithImage === 'code') && (trackPosterDoc === 'artifact');
+  const trackNodePoster = detectTrack('Design the conference poster in poster.pptx about Node.js adoption');
+  const trackBashPoster = detectTrack('Poster in poster.pptx with column layout:\n```bash\npdftoppm -png -r 150 poster.pdf page\n```');
+  const trackCodeProof = detectTrack('Fix TypeScript bug with PROOF_CMD: npm test and src/index.ts');
 
-  // Test 5B: Real XML Artifact dynamically parsed via extractStructuredArtifact
+  const trackDetectionOk = (trackRepoPlan === 'code') &&
+                           (trackNodePoster === 'artifact') &&
+                           (trackBashPoster === 'artifact') &&
+                           (trackCodeProof === 'code');
+
+  // Test 5B: Real XML Artifact dynamically parsed via extractStructuredArtifact (I4 check)
   const rawXmlArtifact = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
   <p:cSld>
     <p:spTree>
-      ${'<p:sp><p:nvSpPr><p:cNvPr id="2" name="Rectangle"/><p:cNvSpPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="100000" y="100000"/><a:ext cx="2000000" cy="1500000"/></a:xfrm><a:solidFill><a:srgbClr val="0A2540"/></a:solidFill></p:spPr><p:txBody><a:p><a:r><a:t>Exploración de la sinapsis virológica del virus de la leucemia bovina y nanotubos</a:t></a:r></p:txBody></p:sp>'.repeat(40)}
+      ${'<p:sp><p:nvSpPr><p:cNvPr id="2" name="Rectangle &amp; Box"/><p:cNvSpPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="100000" y="100000"/><a:ext cx="2000000" cy="1500000"/></a:xfrm><a:solidFill><a:srgbClr val="0A2540"/></a:solidFill></p:spPr><p:txBody><a:p><a:r><a:t xml:space="preserve">Exploración de la sinapsis &amp; nanotubos</a:t></a:r></p:txBody></p:sp>'.repeat(40)}
     </p:spTree>
   </p:cSld>
 </p:sld>`;
 
-  // Dynamically extract structure using real function (not a hardcoded string)
-  const structuredData = extractStructuredArtifact(rawXmlArtifact);
+  const presentationXml = `<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldSz cx="12192000" cy="6858000"/></p:presentation>`;
+
+  // Dynamically extract structure without blind slicing
+  const structuredData = extractStructuredArtifact(rawXmlArtifact, { presentationXml });
   const structuredJson = JSON.stringify(structuredData, null, 2);
 
   const rawTokens = Math.ceil(rawXmlArtifact.length / 4);
   const structuredTokens = Math.ceil(structuredJson.length / 4);
   const tokenSavingsPercent = (((rawTokens - structuredTokens) / rawTokens) * 100).toFixed(1);
 
-  // Assert that data was genuinely derived and preserved
+  // Assert that data was genuinely derived, entities decoded, and all 40 shapes preserved
   const extractionValid = structuredData.shape_count === 40 &&
+                          structuredData.shapes.length === 40 &&
                           structuredData.total_text_nodes === 40 &&
-                          structuredData.slide_dimensions !== null;
-  const tokenSavingsOk = parseFloat(tokenSavingsPercent) >= 50.0;
+                          structuredData.shapes[0].name === 'Rectangle & Box' &&
+                          structuredData.text_nodes[0] === 'Exploración de la sinapsis & nanotubos' &&
+                          structuredData.slide_dimensions !== null &&
+                          structuredData.slide_dimensions.width_emu === 12192000 &&
+                          structuredData.truncated === false;
+  const tokenSavingsOk = parseFloat(tokenSavingsPercent) >= 40.0;
 
-  const passed = trackDetectionOk && extractionValid && tokenSavingsOk;
+  // Test 5C: Single-pass XML entity decoding without double-decoding (M1 check)
+  const rawDoubleEncoded = '&amp;lt;b&amp;gt;&#233;&#x20AC;';
+  const decodedXml = decodeXmlEntities ? decodeXmlEntities(rawDoubleEncoded) : '';
+  const xmlEntityDecodeOk = (decodedXml === '&lt;b&gt;é€');
+
+  // Test 5D: slide_dimensions is null without presentationXml (M4 check)
+  const artifactNoPres = extractStructuredArtifact(rawXmlArtifact, {});
+  const slideDimNullWithoutPres = (artifactNoPres.slide_dimensions === null);
+
+  const passed = trackDetectionOk && extractionValid && tokenSavingsOk && xmlEntityDecodeOk && slideDimNullWithoutPres;
 
   recordResult({
     name: 'Dual-Track Heuristic & Dynamic Artifact Extraction (extractStructuredArtifact)',
     category: 'TOKENOMICS',
     passed,
-    metric: `Track Detection (D10): ${trackDetectionOk} | Extracted Shapes: ${structuredData.shape_count} | Raw: ${rawTokens} tokens -> Extracted: ${structuredTokens} tokens | Savings: ${tokenSavingsPercent}%`,
-    baseline: 'Classifying code plans as artifacts, hardcoded test strings, or flooding context with raw XML',
-    target: 'Precise track classification and >= 50% token savings through dynamic structured extraction',
-    details: 'Verified real extractStructuredArtifact deriving 40 shapes and texts from XML with 85%+ token reduction.',
+    metric: `Track: ${trackDetectionOk} | Shapes: ${structuredData.shape_count} | Entities (M1): ${xmlEntityDecodeOk} | Dim Null (M4): ${slideDimNullWithoutPres} | Savings: ${tokenSavingsPercent}%`,
+    baseline: 'Classifying prose plans as code, blind slicing to 10 shapes, or unescaped XML entities',
+    target: 'Precise track classification, entity decoding, and >= 40% token reduction via complete structured extraction',
+    details: 'Verified real extractStructuredArtifact deriving 40 shapes/texts, single-pass entity decoding (M1), and slide dimension preservation (M4).',
   });
 }
 
@@ -562,7 +708,7 @@ async function runBenchmark5() {
 // ---------------------------------------------------------------------------
 async function main() {
   console.log('===============================================================');
-  console.log('🚀 Claudegravity Loop v1.1.0 Empirical Benchmark Suite');
+  console.log(`🚀 Claudegravity Loop v${PKG_VERSION} Empirical Benchmark Suite`);
   console.log('===============================================================');
 
   const suiteStart = performance.now();
@@ -584,7 +730,7 @@ async function main() {
   console.log(`Score: ${passedCount}/${totalCount} tests passed (${allPassed ? '100%' : Math.round((passedCount/totalCount)*100) + '%'})\n`);
 
   const reportLines = [
-    '# Claudegravity Loop — Informe Oficial de Benchmarks (v1.1.0)',
+    `# Claudegravity Loop — Informe Oficial de Benchmarks (v${PKG_VERSION})`,
     '',
     `**Fecha de Ejecución**: ${new Date().toISOString()}  `,
     `**Plataforma**: ${process.platform} (${process.arch}) | Node.js ${process.version}  `,
@@ -604,9 +750,9 @@ async function main() {
   reportLines.push('', '## Conclusiones Técnicas', '');
   reportLines.push('1. **Eliminación del límite de argumentos en Windows**: `executeReviewerAsync` transmite más de 100 KB por `stdin` sin interbloqueos, tolera salidas tempranas del hijo sin errores EPIPE y preserva caracteres UTF-8 multibyte.');
   reportLines.push('2. **Seguridad TLS estricta por diseño**: `buildChildEnv` centraliza la validación de certificados activa por defecto, eliminando insensiblemente a mayúsculas variables de entorno en Windows con certificados efímeros en memoria.');
-  reportLines.push('3. **Resiliencia de Fallback y Control de Procesos**: `decideFallback` limita estrictamente a 1 salto el fallback consciente del proveedor, `killProcessTree` elimina procesos zombis de forma garantizada y `parseVerdict` falla en cerrado.');
-  reportLines.push('4. **Linter pre-vuelo robusto**: `runPreflightLinter` valida ecuaciones de N operandos, presupuestos con etiquetas de unidades (cm, mm) y fences de código sin falsos positivos en planes válidos.');
-  reportLines.push('5. **Heurística de Doble Pista y Extracción Dinámica**: `detectTrack` clasifica con precisión código frente a documentos visuales y `extractStructuredArtifact` deriva estructuras XML con más del 85% de ahorro de tokens.');
+  reportLines.push('3. **Resiliencia de Fallback y Control de Procesos**: `decideFallback` limita estrictamente a 1 salto el fallback consciente del proveedor, intercepta timeouts de agy forzando código 124, desacopla timeout de fallback y `killProcessTree` elimina procesos zombis de forma garantizada.');
+  reportLines.push('4. **Linter pre-vuelo robusto**: `runPreflightLinter` valida ecuaciones de N operandos, presupuestos con etiquetas de unidades (cm, mm) y fences de código mediante parsing dual-locale (US/EU) y segmentación aislada de ecuación.');
+  reportLines.push('5. **Heurística de Doble Pista y Extracción Dinámica**: `detectTrack` clasifica con precisión código frente a documentos visuales sin falsos positivos de prosa, y `extractStructuredArtifact` decodifica entidades XML y preserva todos los elementos sin recortes ciegos.');
 
   const reportPath = resolve(ROOT, 'BENCHMARK_REPORT.md');
   writeFileSync(reportPath, reportLines.join('\n'), 'utf-8');

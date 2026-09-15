@@ -92,7 +92,7 @@ flowchart TD
 
 ---
 
-## CLI Runner (`claudegravity` v1.1.0)
+## CLI Runner (`claudegravity` v1.1.1)
 
 Claudegravity Loop includes a zero-dependency native JavaScript CLI adapter to automate review rounds, preflight diagnostics, and empirical benchmarks:
 
@@ -107,9 +107,13 @@ node scripts/runner.mjs review --plan PLAN.md --auto-fallback
 #   --model <name>           Reviewer model override (e.g., 'sonnet', 'opus')
 #   --fallback-model <name>  Custom fallback model if primary fails with rate/policy limits
 #   --auto-fallback          Automatic 1-hop fallback on CBRN/policy/rate limits
+#   --fallback-on-timeout    Allow execution timeout to trigger model fallback
 #   --insecure-tls           Opt-in TLS bypass for corporate/local proxies (Warning logged)
 #   --track <type>           Phase 3 track: 'code' (worktrees) or 'artifact' (render/extract)
-#   --timeout <ms>           Round timeout with clean process tree kill (default: 120000)
+#   --timeout <ms>           Round timeout with clean process tree kill (default: 600000)
+#   --skip-lint              Proceed with review even if pre-flight linter detects inconsistencies
+#   --help, -h               Show usage guide
+#   --version, -v            Show runner version
 
 # Run the empirical benchmark suite (5/5 passing benchmarks)
 npm run benchmark
@@ -125,17 +129,19 @@ Empirically validates the performance, stability, and security gains:
 |:---|:---|:---|:---|:---:|
 | **STABILITY** | Win32 Argv Boundary Elimination | Fails above 32,767 chars (~32 KB) | Stdin stream scales up to 100 KB+ | ✅ PASS |
 | **SECURITY** | Scoped TLS Validation Invariant | Unconditional global bypass | Default-secure, opt-in child flag | ✅ PASS |
-| **RESILIENCE** | Deterministic 1-Hop Model Fallback | Unbounded retries or crashes | 1-hop failover on verified signals | ✅ PASS |
-| **EFFICIENCY** | Pre-flight Consistency Linter | Wasting 5–7 API rounds on math bugs | Sub-millisecond arithmetic intercept | ✅ PASS |
-| **TOKENOMICS** | Context Overhead Reduction | Raw XML/blob dumps flooding window | 83.3%–85%+ token reduction via extraction | ✅ PASS |
+| **RESILIENCE** | Deterministic 1-Hop Model Fallback | Unbounded retries or crashes | 1-hop failover on verified signals & agy timeout intercept | ✅ PASS |
+| **EFFICIENCY** | Pre-flight Consistency Linter | Wasting 5–7 API rounds on math bugs | Linear dual-locale (US/EU) parsing & isolated segmentation | ✅ PASS |
+| **TOKENOMICS** | Context Overhead Reduction | Raw XML/blob dumps flooding window | 45%+ token reduction via full structured extraction | ✅ PASS |
 
 ### Runner Exit Codes
 * `0`: **APPROVED** — Plan passed cross-model review with `VERDICT: APPROVED`.
+* `1`: **CONFIG / ARGS ERROR** — Invalid arguments, unknown flags, missing CLI, or missing plan file.
 * `2`: **REVISE** — Reviewer identified architectural findings with `VERDICT: REVISE`. Arbitrate in `PLAN-REVIEW-LOG.md`.
 * `4`: **LINTER ERROR** — Preflight code-fence balance, unit budget, or arithmetic inconsistency in `PLAN.md`.
 * `5`: **BRIDGE ERROR** — Reviewer invocation failure, execution error, or missing verdict tag (never confused with REVISE).
 * `124`: **TIMEOUT** — Review execution exceeded `--timeout` limit (clean process tree termination).
 * `130`: **INTERRUPTED** — Review cancelled by `SIGINT` (Ctrl+C).
+* `143`: **TERMINATED** — Review process terminated by `SIGTERM`.
 
 ---
 
@@ -148,12 +154,36 @@ In Claude Code, add the marketplace repository and install:
 /plugin install claudegravity-loop@claudegravity-loop
 ```
 
-### Method B: Install as a Global Agent Skill
-Clone or symlink into your global agent skills directory:
-```bash
-git clone https://github.com/Nachei20/claudegravity-loop.git ~/.agents/skills/claudegravity-loop
-```
-Both **Claude Code** and **Google Antigravity CLI** will automatically discover and load the skills.
+### Method B: Install as Global Agent Skills
+Different agent CLIs discover user skills in different global directories:
+* **Claude Code**: Discovers skills located at `~/.claude/skills/<skill-name>/SKILL.md`.
+* **Google Antigravity CLI (`agy`)**: Discovers skills located at `~/.agents/skills/<skill-name>/SKILL.md` (or workspace `.agents/skills/`).
+
+Clone the repository and copy or symlink the skills into the respective directories:
+
+**For Claude Code:**
+* Linux / macOS:
+  ```bash
+  mkdir -p ~/.claude/skills
+  cp -r skills/* ~/.claude/skills/
+  ```
+* Windows PowerShell:
+  ```powershell
+  New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.claude\skills"
+  Copy-Item -Recurse "skills\*" "$env:USERPROFILE\.claude\skills\"
+  ```
+
+**For Google Antigravity (`agy`):**
+* Linux / macOS:
+  ```bash
+  mkdir -p ~/.agents/skills
+  cp -r skills/* ~/.agents/skills/
+  ```
+* Windows PowerShell:
+  ```powershell
+  New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.agents\skills"
+  Copy-Item -Recurse "skills\*" "$env:USERPROFILE\.agents\skills\"
+  ```
 
 ---
 
