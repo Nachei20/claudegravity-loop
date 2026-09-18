@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 /**
- * Claudegravity Loop Benchmark Suite — Hardened v1.1.1
+ * Claudegravity Loop Benchmark Suite — Hardened v1.2.0
  * Empirically validates the performance, stability, and security gains of Claudegravity Loop.
- * Directly exercises and validates real functions from runner.mjs against mutation testing (M1-M6).
+ * Directly exercises and validates real functions from runner.mjs against mutation testing (M1-M12).
  * Standard library zero-dependency execution.
  */
 
@@ -35,10 +35,10 @@ import {
 const __dirname = import.meta.dirname ?? dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
-let PKG_VERSION = '1.1.1';
+let PKG_VERSION = '1.2.0';
 try {
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'));
-  PKG_VERSION = pkg.version || '1.1.1';
+  PKG_VERSION = pkg.version || '1.2.0';
 } catch {
   PKG_VERSION = 'unknown';
 }

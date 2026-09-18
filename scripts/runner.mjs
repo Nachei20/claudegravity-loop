@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Claudegravity Loop Runner — Hardened v1.1.1
+ * Claudegravity Loop Runner — Hardened v1.2.0
  * Standard-library zero-dependency CLI adapter for automating cross-model review rounds.
  * Node.js 18+ (Windows, macOS, Linux).
  */
@@ -16,10 +16,10 @@ import process from 'node:process';
 const __dirname = import.meta.dirname ?? dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
-let PKG_VERSION = '1.1.1';
+let PKG_VERSION = '1.2.0';
 try {
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'));
-  PKG_VERSION = pkg.version || '1.1.1';
+  PKG_VERSION = pkg.version || '1.2.0';
 } catch {
   PKG_VERSION = 'unknown';
 }

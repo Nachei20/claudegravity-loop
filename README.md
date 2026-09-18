@@ -92,7 +92,7 @@ flowchart TD
 
 ---
 
-## CLI Runner (`claudegravity` v1.1.1)
+## CLI Runner (`claudegravity` v1.2.0)
 
 Claudegravity Loop includes a zero-dependency native JavaScript CLI adapter to automate review rounds, preflight diagnostics, and empirical benchmarks:
 
@@ -119,18 +119,21 @@ node scripts/runner.mjs review --plan PLAN.md --auto-fallback
 npm run benchmark
 ```
 
+> [!TIP]
+> **Preflight Linter Escape Hatch (`--skip-lint`)**: The preflight linter automatically scopes the `-` operator to recognised budget units (`cm`, `mm`, `px`, `pt`, `%`) and distinguishes ranges (`Columns 3-4`, `Márgenes 1-2cm`) and ISO dates (`2026-09-14`). For complex subtraction equations with intermediate textual labels (e.g., `Layout: col A: 20cm - col B: 5cm = 15cm`), use `--skip-lint` to bypass equation checking while preserving full plan review capabilities.
+
 ---
 
 ## Benchmark Suite (`scripts/benchmark.mjs`)
 
 Empirically validates the performance, stability, and security gains:
 
-| Category | Benchmark | Baseline (v1.0) | Optimized (v1.1) | Status |
+| Category | Benchmark | Baseline (v1.0) | Hardened (v1.2) | Status |
 |:---|:---|:---|:---|:---:|
 | **STABILITY** | Win32 Argv Boundary Elimination | Fails above 32,767 chars (~32 KB) | Stdin stream scales up to 100 KB+ | ✅ PASS |
-| **SECURITY** | Scoped TLS Validation Invariant | Unconditional global bypass | Default-secure, opt-in child flag | ✅ PASS |
+| **SECURITY** | Scoped TLS & Windows Shim Resolution | Global bypass & raw .cmd injection | Default TLS, nvm4w junction support & traversal immunity | ✅ PASS |
 | **RESILIENCE** | Deterministic 1-Hop Model Fallback | Unbounded retries or crashes | 1-hop failover on verified signals & agy timeout intercept | ✅ PASS |
-| **EFFICIENCY** | Pre-flight Consistency Linter | Wasting 5–7 API rounds on math bugs | Linear dual-locale (US/EU) parsing & isolated segmentation | ✅ PASS |
+| **EFFICIENCY** | Pre-flight Consistency Linter | Wasting 5–7 API rounds on math bugs | Scoped minus operator, ranges, dual-locale (US/EU) & segmentation | ✅ PASS |
 | **TOKENOMICS** | Context Overhead Reduction | Raw XML/blob dumps flooding window | 45%+ token reduction via full structured extraction | ✅ PASS |
 
 ### Runner Exit Codes
@@ -154,7 +157,20 @@ In Claude Code, add the marketplace repository and install:
 /plugin install claudegravity-loop@claudegravity-loop
 ```
 
-### Method B: Install as Global Agent Skills
+To update an existing installation:
+```bash
+/plugin marketplace update claudegravity-loop
+/plugin update claudegravity-loop@claudegravity-loop
+```
+
+### Method B: Install as Google Antigravity Plugin (`agy` 1.2+)
+In Antigravity CLI, import the repository directly:
+```bash
+agy plugin import <path-to-claudegravity-loop>
+```
+This automatically registers the 4 skills and provides access to `scripts/runner.mjs` in `~/.gemini/config/plugins/claudegravity-loop`.
+
+### Method C: Install as Global Agent Skills
 Different agent CLIs discover user skills in different global directories:
 * **Claude Code**: Discovers skills located at `~/.claude/skills/<skill-name>/SKILL.md`.
 * **Google Antigravity CLI (`agy`)**: Discovers skills located at `~/.agents/skills/<skill-name>/SKILL.md` (or workspace `.agents/skills/`).
@@ -173,7 +189,7 @@ Clone the repository and copy or symlink the skills into the respective director
   Copy-Item -Recurse "skills\*" "$env:USERPROFILE\.claude\skills\"
   ```
 
-**For Google Antigravity (`agy`):**
+**For Google Antigravity (`agy` legacy / manual):**
 * Linux / macOS:
   ```bash
   mkdir -p ~/.agents/skills
