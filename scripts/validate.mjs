@@ -41,6 +41,8 @@ export function validateSkillFrontmatter(content, expectedName) {
   }
   if (!descText) {
     validationErrors.push("Missing non-empty description");
+  } else if (descText.length > 1024) {
+    validationErrors.push(`Description exceeds 1024 characters (${descText.length})`);
   }
   return { valid: validationErrors.length === 0, errors: validationErrors };
 }
@@ -287,12 +289,17 @@ const negativeCiFixtures = [
   { name: 'benchmark step removed', content: realCiContent.replace(/- name: Run Empirical Benchmarks[\s\S]*?run: npm run benchmark/m, '') },
 ];
 
+const tooLongDesc = `---\nname: test-skill\ndescription: ${'a'.repeat(1025)}\n---`;
 if (validateSkillFrontmatter(emptyDescBlock, 'test-skill').valid) {
   console.error('❌ Negative fixture failed: empty block description was accepted!');
   errors++;
 }
 if (validateSkillFrontmatter(emptyDescInline, 'test-skill').valid) {
   console.error('❌ Negative fixture failed: empty inline description was accepted!');
+  errors++;
+}
+if (validateSkillFrontmatter(tooLongDesc, 'test-skill').valid) {
+  console.error('❌ Negative fixture failed: description exceeding 1024 chars was accepted!');
   errors++;
 }
 for (const fix of negativeCiFixtures) {
