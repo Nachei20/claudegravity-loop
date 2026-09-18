@@ -734,16 +734,36 @@ async function runBenchmark5() {
   const artifactNoPres = extractStructuredArtifact(rawXmlArtifact, {});
   const slideDimNullWithoutPres = (artifactNoPres.slide_dimensions === null);
 
-  const passed = trackDetectionOk && extractionValid && tokenSavingsOk && xmlEntityDecodeOk && slideDimNullWithoutPres;
+  // Test 5E: Safe XML entity decoding without RangeError or NUL injection (Decisión 4, M6, M7)
+  const safeEntitiesOk = (() => {
+    if (!decodeXmlEntities) return false;
+    if (decodeXmlEntities('&#65; &#x42;') !== 'A B') return false;
+    const nulDecoded = decodeXmlEntities('&#0; &#x0;');
+    if (nulDecoded.includes('\0') || nulDecoded !== '&#0; &#x0;') return false;
+    try {
+      if (decodeXmlEntities('&#x110000; &#99999999;') !== '&#x110000; &#99999999;') return false;
+    } catch {
+      return false;
+    }
+    try {
+      if (decodeXmlEntities('&#xD800;') !== '&#xD800;') return false;
+    } catch {
+      return false;
+    }
+    if (decodeXmlEntities('&unknown;') !== '&unknown;') return false;
+    return true;
+  })();
+
+  const passed = trackDetectionOk && extractionValid && tokenSavingsOk && xmlEntityDecodeOk && slideDimNullWithoutPres && safeEntitiesOk;
 
   recordResult({
     name: 'Dual-Track Heuristic & Dynamic Artifact Extraction (extractStructuredArtifact)',
     category: 'TOKENOMICS',
     passed,
-    metric: `Track: ${trackDetectionOk} | Shapes: ${structuredData.shape_count} | Entities (M1): ${xmlEntityDecodeOk} | Dim Null (M4): ${slideDimNullWithoutPres} | Savings: ${tokenSavingsPercent}%`,
+    metric: `Track: ${trackDetectionOk} | Shapes: ${structuredData.shape_count} | Entities (M1): ${xmlEntityDecodeOk} | Safe Entities (M6/M7): ${safeEntitiesOk} | Dim Null (M4): ${slideDimNullWithoutPres} | Savings: ${tokenSavingsPercent}%`,
     baseline: 'Classifying prose plans as code, blind slicing to 10 shapes, or unescaped XML entities',
     target: 'Precise track classification, entity decoding, and >= 40% token reduction via complete structured extraction',
-    details: 'Verified real extractStructuredArtifact deriving 40 shapes/texts, single-pass entity decoding (M1), and slide dimension preservation (M4).',
+    details: 'Verified real extractStructuredArtifact deriving 40 shapes/texts, single-pass entity decoding (M1), safe XML entities without NUL or RangeError (M6/M7), and slide dimension preservation (M4).',
   });
 }
 

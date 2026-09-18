@@ -326,8 +326,17 @@ export function decideFallback({ currentModel, reviewer, status, output, autoFal
 export function decodeXmlEntities(str) {
   if (!str) return '';
   return str.replace(/&(?:#x([0-9a-fA-F]+)|#(\d+)|([a-zA-Z]+));/g, (match, hex, dec, named) => {
-    if (hex) return String.fromCodePoint(parseInt(hex, 16));
-    if (dec) return String.fromCodePoint(parseInt(dec, 10));
+    if (hex || dec) {
+      const cp = hex ? parseInt(hex, 16) : parseInt(dec, 10);
+      if (cp > 0 && cp <= 0x10FFFF && !(cp >= 0xD800 && cp <= 0xDFFF)) {
+        try {
+          return String.fromCodePoint(cp);
+        } catch {
+          return match;
+        }
+      }
+      return match;
+    }
     switch (named) {
       case 'lt': return '<';
       case 'gt': return '>';
