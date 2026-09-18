@@ -408,7 +408,9 @@ export function extractEquationSegment(line) {
   for (let i = colons.length - 1; i >= 0; i--) {
     const colIdx = colons[i].index;
     const prefixBeforeCol = left.slice(0, colIdx);
-    const hasArithmeticInPrefix = /\+|\s+-\s+|\d\s*-\s*\d/.test(prefixBeforeCol);
+    const hasMinusOp = /\d\s*(?:cm|mm|px|pt|%)\s*-\s*/i.test(prefixBeforeCol) ||
+                       /(?:^|[^\d\s])\s*-\s*\d+(?:[.,]\d+)?\s*(?:cm|mm|px|pt|%)/i.test(prefixBeforeCol);
+    const hasArithmeticInPrefix = /\+/.test(prefixBeforeCol) || hasMinusOp;
     if (!hasArithmeticInPrefix) {
       left = left.slice(colIdx + 1);
       break;

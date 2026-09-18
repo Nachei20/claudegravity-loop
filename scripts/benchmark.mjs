@@ -616,6 +616,12 @@ async function runBenchmark4() {
     'Layout: col A: 20cm + col B: 30cm = 50cm',
     'Column 2 (40cm): 20cm + 20cm = 40cm',
     'Poster 90cm: 20cm + 30cm = 50cm',
+    // v1.2.0 Decisión 3 test cases
+    'Columns 3-4 (40cm): 20cm + 20cm = 40cm',
+    'Columns 3 - 4 (40cm): 20cm + 20cm = 40cm',
+    'Sprint 2026-09-14 (90cm): 20cm + 30cm = 50cm',
+    'Márgenes 1-2cm: 5cm + 5cm = 10cm',
+    'Márgenes 1 - 2cm: 5cm + 5cm = 10cm',
   ];
 
   const invalidCases = [
@@ -631,6 +637,12 @@ async function runBenchmark4() {
     'Layout: col A: 20cm + col B: 30cm = 60cm',
     'Column 2 (40cm): 20cm + 20cm = 50cm',
     'Poster 90cm: 20cm + 30cm = 60cm',
+    // v1.2.0 Decisión 3 test cases
+    'Columns 3-4 (40cm): 20cm + 30cm = 40cm',
+    'Columns 3 - 4 (40cm): 20cm + 30cm = 40cm',
+    'Sprint 2026-09-14 (90cm): 20cm + 40cm = 50cm',
+    'Márgenes 1-2cm: 5cm + 5cm = 12cm',
+    'Gap: 1.5cm - 0.5cm = 2.0cm',
   ];
 
   const validCasesOk = validCases.every((text) => runPreflightLinter(text).ok);
@@ -659,7 +671,7 @@ async function runBenchmark4() {
     metric: `Audit Matrix (${validCases.length + invalidCases.length} cases): ${linterMatrixOk} | Tilde Fence: ${tildeFenceOk} | Plan Linter: ${repoPlanOk} (${planDuration}ms)`,
     baseline: 'Crashing on N>=3 operands, missing labeled cm budgets, or skipping lines with non-linear tokens',
     target: 'Linear sub-millisecond linting with dual-locale (US/EU) parsing and isolated equation segmentation',
-    details: 'Verified 23 audit cases: non-linear skips, thousands dots/commas, decimal commas, dual locale US/EU, and clean clone resilience.',
+    details: `Verified ${validCases.length + invalidCases.length} audit cases: scoped minus operator, ranges, ISO dates, non-linear skips, thousands dots/commas, decimal commas, dual locale US/EU, and clean clone resilience.`,
   });
 }
 
