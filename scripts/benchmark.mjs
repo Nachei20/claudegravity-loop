@@ -753,18 +753,22 @@ async function runBenchmark4() {
 async function runBenchmark5() {
   console.log('\n📊 Running Benchmark 5: Dual-Track Detection & Dynamic XML Structured Extraction...');
 
-  // Test 5A: Dual-Track Classification (M1 / M5 check)
+  // Test 5A: Dual-Track Classification (M1 / M5 / M12 check)
   const samplePlanText = `# Implementation Plan\n\n\`\`\`bash\ngit worktree add -b feat/task ../task-worktree\nnpm test\n\`\`\`\n`;
   const planText = existsSync(resolve(ROOT, 'PLAN.md')) ? readFileSync(resolve(ROOT, 'PLAN.md'), 'utf-8') : samplePlanText;
   const trackRepoPlan = detectTrack(planText);
   const trackNodePoster = detectTrack('Design the conference poster in poster.pptx about Node.js adoption');
   const trackBashPoster = detectTrack('Poster in poster.pptx with column layout:\n```bash\npdftoppm -png -r 150 poster.pdf page\n```');
   const trackCodeProof = detectTrack('Fix TypeScript bug with PROOF_CMD: npm test and src/index.ts');
+  const trackDeckBare = detectTrack('Plan de diapositivas en deck.pptx: revisar `test.py` y adopción de Node.js');
+  const trackDeckPath = detectTrack('Plan de backend en deck.pptx: modificar src/test.py y correr tests');
 
   const trackDetectionOk = (trackRepoPlan === 'code') &&
                            (trackNodePoster === 'artifact') &&
                            (trackBashPoster === 'artifact') &&
-                           (trackCodeProof === 'code');
+                           (trackCodeProof === 'code') &&
+                           (trackDeckBare === 'artifact') &&
+                           (trackDeckPath === 'code');
 
   // Test 5B: Real XML Artifact dynamically parsed via extractStructuredArtifact (I4 check)
   const rawXmlArtifact = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

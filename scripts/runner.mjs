@@ -351,9 +351,7 @@ export function detectTrack(planContent, requestedTrack = 'auto') {
     /\bgit\s+worktree\b/i.test(planContent) ||
     /\b(?:npm|pnpm|yarn|bun)\s+(?:test|run|install|build)\b/i.test(planContent) ||
     /\b(?:pytest|cargo\s+(?:test|build)|go\s+(?:test|build))\b/i.test(planContent) ||
-    /(?:`[^`]*[/\\][\w-]+\.(?:ts|js|mjs|cjs|py|go|rs|cpp|c|java|cs|sh|rb|php)\b[^`]*`)/i.test(planContent) ||
-    /(?:[/\\](?:src|lib|test|tests|scripts)[/\\][\w-]+\.(?:ts|js|mjs|cjs|py|go|rs|cpp|c|java|cs|sh)\b)/i.test(planContent) ||
-    /(?:^|\s)[\w-]+\.(?:ts|py|go|rs|cpp|java|cs)\b/i.test(planContent);
+    /(?:^|\s|`)(?:[\w.-]+[/\\])+[\w.-]+\.(?:ts|js|mjs|cjs|py|go|rs|cpp|c|java|cs|sh|rb|php)\b/i.test(planContent);
 
   const artifactPatterns = /\.(?:pptx|pdf|docx|xlsx|svg|drawio|cad)\b/i;
   const isArtifactDeliverable = artifactPatterns.test(planContent) && !hasStrongCodeIndicators;
