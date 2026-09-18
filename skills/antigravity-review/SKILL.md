@@ -29,10 +29,11 @@ Confirm Google Antigravity CLI (`agy`) is reachable:
 Ensure the plan is written in `PLAN.md`. Initialize `PLAN-REVIEW-LOG.md` if not already present.
 
 ### 3. Send to Antigravity (Headless Read-Only Mode)
-Execute using the native runner or direct CLI:
+Resolve the runner script at `<SKILL_DIR>/../../scripts/runner.mjs` (where `<SKILL_DIR>` is the base directory containing this `SKILL.md`, reported by Claude Code as "Base directory for this skill"). If `runner.mjs` does not exist, use the direct CLI call below.
+
 ```bash
 # Via native runner with pre-flight linter:
-node "${CLAUDE_PLUGIN_ROOT:-.}/scripts/runner.mjs" review --plan PLAN.md --host claude --auto-fallback
+node "<SKILL_DIR>/../../scripts/runner.mjs" review --plan PLAN.md --host claude --auto-fallback
 
 # Or direct CLI call:
 agy -p "You are an adversarial reviewer for an implementation plan under the Claudegravity Loop protocol. Your job is to find flaws, not to validate or flatter. Adopt a rigorous, critical stance (Anti-Sycophancy). Assume the role of a Principal Systems Architect under pressure of production failure: identify concrete flaws: security vulnerabilities, race conditions, edge cases, schema conflicts, or hidden assumptions. For each flaw, provide a specific technical fix. End your response with EXACTLY one of: VERDICT: APPROVED or VERDICT: REVISE.

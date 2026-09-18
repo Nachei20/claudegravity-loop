@@ -138,11 +138,13 @@ flowchart TD
 ### Phase 2 — REVIEW (Adversarial Attack & Pressure Framing)
 
 #### Calling the Rival CLI (via Hardened Runner):
+Resolve the runner script at `<SKILL_DIR>/../../scripts/runner.mjs` (where `<SKILL_DIR>` is the base directory containing this `SKILL.md`, reported by Claude Code as "Base directory for this skill"). If `runner.mjs` does not exist, use the direct CLI calls below.
+
 ```bash
 # Automated runner with streaming stdin, preflight linter, and bounded fallback
-node "${CLAUDE_PLUGIN_ROOT:-.}/scripts/runner.mjs" review --plan PLAN.md --host claude --auto-fallback
+node "<SKILL_DIR>/../../scripts/runner.mjs" review --plan PLAN.md --host claude --auto-fallback
 # If host is Antigravity:
-node "${CLAUDE_PLUGIN_ROOT:-.}/scripts/runner.mjs" review --plan PLAN.md --host antigravity --auto-fallback
+node "<SKILL_DIR>/../../scripts/runner.mjs" review --plan PLAN.md --host antigravity --auto-fallback
 ```
 
 * **When Host is Claude Code** $\rightarrow$ Calls Antigravity:

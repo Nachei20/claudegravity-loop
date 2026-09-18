@@ -39,6 +39,23 @@ export function validateSkillFrontmatter(content, expectedName) {
   if (!nameMatch || nameMatch[1].trim() !== expectedName) {
     validationErrors.push(`Name mismatch: expected '${expectedName}', got '${nameMatch ? nameMatch[1].trim() : 'none'}'`);
   }
+
+  // AX1 guard: skills must not contain unresolved CLAUDE_PLUGIN_ROOT
+  if (content.includes('CLAUDE_PLUGIN_ROOT')) {
+    validationErrors.push("Skill content must not contain 'CLAUDE_PLUGIN_ROOT'");
+  }
+
+  // AX3 guard: inline unquoted description containing ': ' breaks strict YAML in agy
+  const inlineHeaderMatch = fm.match(/^description:\s*(?![-|>])(.*)$/m);
+  if (inlineHeaderMatch) {
+    const inlineRaw = inlineHeaderMatch[1].trim();
+    const isQuoted = (inlineRaw.startsWith('"') && inlineRaw.endsWith('"')) ||
+                     (inlineRaw.startsWith("'") && inlineRaw.endsWith("'"));
+    if (!isQuoted && /:\s+/.test(inlineRaw)) {
+      validationErrors.push("Inline unquoted description must not contain ': ' (causes YAML parsing failure in agy)");
+    }
+  }
+
   if (!descText) {
     validationErrors.push("Missing non-empty description");
   } else if (descText.length > 1024) {
@@ -290,6 +307,9 @@ const negativeCiFixtures = [
 ];
 
 const tooLongDesc = `---\nname: test-skill\ndescription: ${'a'.repeat(1025)}\n---`;
+const unquotedInlineWithColon = `---\nname: test-skill\ndescription: Review implementation: find flaws\n---\nBody here`;
+const skillWithPluginRoot = `---\nname: test-skill\ndescription: >-\n  A valid description.\n---\nnode "\${CLAUDE_PLUGIN_ROOT}/scripts/runner.mjs"`;
+
 if (validateSkillFrontmatter(emptyDescBlock, 'test-skill').valid) {
   console.error('❌ Negative fixture failed: empty block description was accepted!');
   errors++;
@@ -300,6 +320,14 @@ if (validateSkillFrontmatter(emptyDescInline, 'test-skill').valid) {
 }
 if (validateSkillFrontmatter(tooLongDesc, 'test-skill').valid) {
   console.error('❌ Negative fixture failed: description exceeding 1024 chars was accepted!');
+  errors++;
+}
+if (validateSkillFrontmatter(unquotedInlineWithColon, 'test-skill').valid) {
+  console.error('❌ Negative fixture failed: unquoted inline description with colon was accepted!');
+  errors++;
+}
+if (validateSkillFrontmatter(skillWithPluginRoot, 'test-skill').valid) {
+  console.error('❌ Negative fixture failed: skill containing CLAUDE_PLUGIN_ROOT was accepted!');
   errors++;
 }
 for (const fix of negativeCiFixtures) {
