@@ -163,43 +163,20 @@ To update an existing installation:
 /plugin update claudegravity-loop@claudegravity-loop
 ```
 
-### Method B: Install as Google Antigravity Plugin (`agy` 1.2+)
-In Antigravity CLI, import the repository directly:
+### Method B: Install as a Google Antigravity Plugin (`agy` 1.2+)
+The supported installation method for Antigravity is importing a clean checkout of the release tag:
 ```bash
-agy plugin import <path-to-claudegravity-loop>
+agy plugin import <path-to-clean-checkout-of-tag>
 ```
-This automatically registers the 4 skills and provides access to `scripts/runner.mjs` in `~/.gemini/config/plugins/claudegravity-loop`.
+This automatically registers the 4 skills and bundles `scripts/runner.mjs` directly into `~/.gemini/config/plugins/claudegravity-loop/`.
 
-### Method C: Install as Global Agent Skills
-Different agent CLIs discover user skills in different global directories:
-* **Claude Code**: Discovers skills located at `~/.claude/skills/<skill-name>/SKILL.md`.
-* **Google Antigravity CLI (`agy`)**: Discovers skills located at `~/.agents/skills/<skill-name>/SKILL.md` (or workspace `.agents/skills/`).
+> [!WARNING]
+> * **Clean checkout required**: Always run `agy plugin import` against a clean checkout of the tag (e.g. `git checkout v1.2.0`). Importing from an active working tree copies `.git`, `PLAN.md`, audit logs, and temporary files into the global plugin cache.
+> * **`agy plugin install` not supported**: `agy plugin install` requires a remote plugin registry entry and rejects this local repository.
+> * **No symlinks / junctions**: Antigravity does not traverse filesystem junctions or symbolic links when discovering plugins or skills.
 
-Clone the repository and copy or symlink the skills into the respective directories:
-
-**For Claude Code:**
-* Linux / macOS:
-  ```bash
-  mkdir -p ~/.claude/skills
-  cp -r skills/* ~/.claude/skills/
-  ```
-* Windows PowerShell:
-  ```powershell
-  New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.claude\skills"
-  Copy-Item -Recurse "skills\*" "$env:USERPROFILE\.claude\skills\"
-  ```
-
-**For Google Antigravity (`agy` legacy / manual):**
-* Linux / macOS:
-  ```bash
-  mkdir -p ~/.agents/skills
-  cp -r skills/* ~/.agents/skills/
-  ```
-* Windows PowerShell:
-  ```powershell
-  New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.agents\skills"
-  Copy-Item -Recurse "skills\*" "$env:USERPROFILE\.agents\skills\"
-  ```
+### Manual / Fallback Skill Installation
+If you manually copy individual `skills/*` folders into global directories (`~/.claude/skills/` or a local project `.agents/skills/`), note that `scripts/runner.mjs` is located outside `skills/` and will not be present. The skills will automatically fall back to the direct CLI invocations (`agy -p` / `claude -p`) documented inside each `SKILL.md`.
 
 ---
 
