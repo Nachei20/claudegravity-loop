@@ -9,7 +9,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import https from 'node:https';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync, mkdirSync, symlinkSync } from 'node:fs';
 import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
@@ -27,6 +27,7 @@ import {
   getExecutable,
   pickExecutable,
   isWindowsShim,
+  resolveNpmShim,
   decodeXmlEntities,
   FALLBACK_SIGNALS,
 } from './runner.mjs';
@@ -212,6 +213,7 @@ async function runBenchmark2() {
   let windowsExePreferred = true;
   let pickExecutableOk = false;
   let shimDetectionOk = false;
+  let shimResolutionOk = false;
   const initialParentEnv = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
 
   try {
@@ -365,6 +367,76 @@ async function runBenchmark2() {
                             (winDotPathShim === true) &&
                             (winDotPathExe === false);
 
+          // 8. resolveNpmShim pure resolution, nvm4w junction, traversal immunity (M9, M10, M11 check)
+          const shimFixtureDir = mkdtempSync(join(tmpDir, 'shim-fixtures-'));
+          try {
+            const realStore = join(shimFixtureDir, 'realStore');
+            const linkDir = join(shimFixtureDir, 'linkDir');
+            mkdirSync(join(realStore, 'node_modules', 'test-pkg'), { recursive: true });
+            writeFileSync(join(realStore, 'node_modules', 'test-pkg', 'cli.js'), 'console.log("VERDICT: APPROVED");');
+
+            try {
+              symlinkSync(realStore, linkDir, 'junction');
+            } catch {
+              symlinkSync(realStore, linkDir, 'dir');
+            }
+
+            writeFileSync(join(linkDir, 'tool.cmd'), '@echo off\r\n"%dp0%\\node_modules\\test-pkg\\cli.js" %*\r\n');
+            writeFileSync(join(linkDir, 'tool'), '#!/bin/sh\n"$basedir/node_modules/test-pkg/cli.js" "$@"\n');
+
+            const shOnlyDir = join(shimFixtureDir, 'sh-only');
+            mkdirSync(join(shOnlyDir, 'node_modules', 'test-pkg'), { recursive: true });
+            writeFileSync(join(shOnlyDir, 'node_modules', 'test-pkg', 'cli.js'), 'console.log("VERDICT: APPROVED");');
+            writeFileSync(join(shOnlyDir, 'sh-tool'), '#!/bin/sh\n"$basedir/node_modules/test-pkg/cli.js" "$@"\n');
+
+            writeFileSync(join(linkDir, 'evil.cmd'), '@echo off\r\n"%dp0%\\node_modules\\..\\..\\evil.js" %*\r\n');
+            writeFileSync(join(shimFixtureDir, 'evil.js'), 'console.log("evil");');
+
+            writeFileSync(join(linkDir, 'broken.cmd'), '@echo off\r\n"%dp0%\\node_modules\\missing\\cli.js" %*\r\n');
+
+            const resCmd = resolveNpmShim ? resolveNpmShim(join(linkDir, 'tool.cmd'), { platform: 'win32' }) : null;
+            const resExtless = resolveNpmShim ? resolveNpmShim(join(linkDir, 'tool'), { platform: 'win32' }) : null;
+            const resSh = resolveNpmShim ? resolveNpmShim(join(shOnlyDir, 'sh-tool'), { platform: 'win32' }) : null;
+            const resEvil = resolveNpmShim ? resolveNpmShim(join(linkDir, 'evil.cmd'), { platform: 'win32' }) : true;
+            const resBroken = resolveNpmShim ? resolveNpmShim(join(linkDir, 'broken.cmd'), { platform: 'win32' }) : true;
+            const resLinux = resolveNpmShim ? resolveNpmShim(join(linkDir, 'tool.cmd'), { platform: 'linux' }) : true;
+
+            const junctionOk = resCmd !== null && resCmd.entry.toLowerCase().includes('test-pkg');
+            const extlessOk = resExtless !== null && resExtless.entry.toLowerCase().includes('test-pkg');
+            const shOk = resSh !== null && resSh.entry.toLowerCase().includes('test-pkg');
+            const traversalBlocked = resEvil === null;
+            const brokenBlocked = resBroken === null;
+            const linuxIgnored = resLinux === null;
+
+            let liveShimOk = true;
+            if (process.platform === 'win32') {
+              try {
+                const execRes = await executeReviewerAsync({
+                  bin: join(linkDir, 'tool.cmd'),
+                  args: [],
+                  prompt: 'test',
+                  stdin: true,
+                  timeout: 5000,
+                });
+                const evilRes = await executeReviewerAsync({
+                  bin: join(linkDir, 'evil.cmd'),
+                  args: [],
+                  prompt: 'test',
+                  stdin: true,
+                  timeout: 5000,
+                });
+                liveShimOk = (execRes.status === 0 && execRes.stdout.includes('VERDICT: APPROVED')) &&
+                             (evilRes.status === 5 && evilRes.stderr.includes('[SECURITY ERROR]'));
+              } catch {
+                liveShimOk = false;
+              }
+            }
+
+            shimResolutionOk = junctionOk && extlessOk && shOk && traversalBlocked && brokenBlocked && linuxIgnored && liveShimOk;
+          } catch {
+            shimResolutionOk = false;
+          }
+
           server.close(() => resolveSuite());
         } catch (err) {
           server.close(() => rejectSuite(err));
@@ -376,16 +448,16 @@ async function runBenchmark2() {
   }
 
   const parentEnvUnpolluted = (process.env.NODE_TLS_REJECT_UNAUTHORIZED === initialParentEnv);
-  const passed = defaultRejected && caseScrubbingWorked && optInAllowed && parentEnvUnpolluted && cmdInjectionImmune && windowsExePreferred && pickExecutableOk && shimDetectionOk;
+  const passed = defaultRejected && caseScrubbingWorked && optInAllowed && parentEnvUnpolluted && cmdInjectionImmune && windowsExePreferred && pickExecutableOk && shimDetectionOk && shimResolutionOk;
 
   recordResult({
     name: 'Scoped TLS Invariant & Case-Insensitive Env Scrubbing (buildChildEnv)',
     category: 'SECURITY',
     passed,
-    metric: `Default Reject: ${defaultRejected ? 'YES' : 'NO'} | Casing Scrub (D7): ${caseScrubbingWorked ? 'YES' : 'NO'} | Opt-in Success: ${optInAllowed ? 'YES' : 'NO'} | Injection Immune: ${cmdInjectionImmune ? 'YES' : 'NO'} | Exe Preferred: ${windowsExePreferred ? 'YES' : 'NO'} | Pick Exe (M4): ${pickExecutableOk} | Shim Guard (R1/I3): ${shimDetectionOk}`,
+    metric: `Default Reject: ${defaultRejected ? 'YES' : 'NO'} | Casing Scrub (D7): ${caseScrubbingWorked ? 'YES' : 'NO'} | Opt-in Success: ${optInAllowed ? 'YES' : 'NO'} | Injection Immune: ${cmdInjectionImmune ? 'YES' : 'NO'} | Exe Preferred: ${windowsExePreferred ? 'YES' : 'NO'} | Pick Exe (M4): ${pickExecutableOk} | Shim Guard (R1/I3): ${shimDetectionOk} | Shim Resolve (M9-M11): ${shimResolutionOk}`,
     baseline: 'Unconditional global TLS bypass, casing leak, or cmd.exe shell injection vulnerability',
     target: 'Default-secure TLS, case-insensitive scrubbing, and complete cmd.exe shell injection elimination',
-    details: 'Verified real buildChildEnv against casing variations (M1), bypass (M2), batch shim injection immunity, .exe preference (M4), platform-scoped shim guard (R1), and dot-path shim detection (I3).',
+    details: 'Verified real buildChildEnv against casing variations (M1), bypass (M2), batch shim injection immunity, .exe preference (M4), platform-scoped shim guard (R1), dot-path shim detection (I3), and safe npm shim resolution with nvm4w junctions and traversal rejection (M9-M11).',
   });
 }
 

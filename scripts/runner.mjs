@@ -8,7 +8,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, realpathSync } from 'node:fs';
-import { dirname, resolve, join, basename, extname, win32 } from 'node:path';
+import path, { dirname, resolve, join, basename, extname, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import process from 'node:process';
@@ -48,6 +48,79 @@ export function isWindowsShim(binPath, platform = process.platform) {
   const base = win32.basename(binPath).toLowerCase();
   const ext = win32.extname(base);
   return ext === '' || ext === '.cmd' || ext === '.bat' || ext === '.ps1';
+}
+
+export function resolveNpmShim(binPath, { platform = process.platform, fsMock } = {}) {
+  if (!binPath || platform !== 'win32') return null;
+  const fsImpl = fsMock || { existsSync, readFileSync, realpathSync };
+  const pathMod = platform === 'win32' ? win32 : path;
+  const pathSep = platform === 'win32' ? win32.sep : path.sep;
+
+  let targetShim = binPath;
+  const lower = binPath.toLowerCase();
+
+  if (lower.endsWith('.cmd') || lower.endsWith('.bat')) {
+    targetShim = binPath;
+  } else if (lower.endsWith('.exe')) {
+    return null;
+  } else {
+    // Win32 where.exe often returns extensionless shim first
+    const cmdSibling = `${binPath}.cmd`;
+    if (fsImpl.existsSync(cmdSibling)) {
+      targetShim = cmdSibling;
+    } else if (fsImpl.existsSync(binPath)) {
+      targetShim = binPath;
+    } else {
+      return null;
+    }
+  }
+
+  let content;
+  try {
+    content = fsImpl.readFileSync(targetShim, 'utf8').slice(0, 8192);
+  } catch {
+    return null;
+  }
+
+  let relEntry = null;
+  // Match .cmd shims: %dp0%\node_modules\... or %~dp0\node_modules\...
+  const cmdMatches = [...content.matchAll(/%(?:~dp0|dp0%)[\\/](node_modules[\\/][^"'\r\n]+)/gi)];
+  if (cmdMatches.length > 0) {
+    const jsMatch = cmdMatches.find((m) => /\.(?:m?js|cjs)$/i.test(m[1])) || cmdMatches[cmdMatches.length - 1];
+    relEntry = jsMatch[1];
+  } else {
+    // Match sh shims: $basedir/node_modules/...
+    const shMatches = [...content.matchAll(/\$basedir[\\/](node_modules[\\/][^"'\r\n]+)/gi)];
+    if (shMatches.length > 0) {
+      const jsMatch = shMatches.find((m) => /\.(?:m?js|cjs)$/i.test(m[1])) || shMatches[shMatches.length - 1];
+      relEntry = jsMatch[1];
+    }
+  }
+
+  if (!relEntry) return null;
+
+  const shimDir = pathMod.dirname(targetShim);
+  const resolvedEntry = pathMod.resolve(shimDir, relEntry);
+
+  if (!fsImpl.existsSync(resolvedEntry)) return null;
+
+  try {
+    const realShimModules = fsImpl.realpathSync(pathMod.join(shimDir, 'node_modules')) + pathSep;
+    const realEntry = fsImpl.realpathSync(resolvedEntry);
+    if (!realEntry.toLowerCase().startsWith(realShimModules.toLowerCase())) {
+      return null; // Traversal attempt outside node_modules
+    }
+  } catch {
+    return null;
+  }
+
+  let nodeBin = process.execPath;
+  const localNode = pathMod.join(shimDir, 'node.exe');
+  if (fsImpl.existsSync(localNode)) {
+    nodeBin = localNode;
+  }
+
+  return { bin: nodeBin, entry: resolvedEntry };
 }
 
 export function getExecutable(bin) {
@@ -651,14 +724,20 @@ export function killProcessTree(pid) {
 }
 
 export async function executeReviewerAsync({ bin, args = [], prompt, env = process.env, stdin = true, timeout = 600000 }) {
-  // Proactively reject Windows batch shims (.cmd, .bat) to prevent cmd.exe command injection
-  if (process.platform === 'win32') {
-    const lowerBin = (bin || '').toLowerCase();
-    if (lowerBin.endsWith('.cmd') || lowerBin.endsWith('.bat')) {
-      const errMessage = `[SECURITY ERROR] Windows batch shims (.cmd/.bat) are rejected to prevent cmd.exe command injection. Install native binary or use native launcher.`;
+  let spawnBin = bin;
+  let spawnArgs = args;
+
+  // On Windows, resolve shims via Node without cmd.exe shell wrapper
+  if (process.platform === 'win32' && isWindowsShim(bin)) {
+    const resolved = resolveNpmShim(bin);
+    if (resolved) {
+      spawnBin = resolved.bin;
+      spawnArgs = [resolved.entry, ...args];
+    } else {
+      const errMessage = `[SECURITY ERROR] Windows batch shims (.cmd/.bat) could not be safely resolved via node. Install native binary (.exe) or ensure package is under node_modules.`;
       console.error(`\n❌ ${errMessage}`);
       return {
-        status: 1,
+        status: 5,
         stdout: '',
         stderr: errMessage,
         timedOut: false,
@@ -674,11 +753,12 @@ export async function executeReviewerAsync({ bin, args = [], prompt, env = proce
     let graceTimer = null;
     let settled = false;
 
-    const child = spawn(bin, args, {
+    const child = spawn(spawnBin, spawnArgs, {
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: process.platform !== 'win32',
       windowsHide: true,
+      shell: false,
     });
 
     const cleanupSignals = () => {
@@ -818,8 +898,18 @@ export function runPreflight(options = {}) {
   const agyIsShim = isWindowsShim(agy);
   const claudeIsShim = isWindowsShim(claude);
 
-  const agyStatus = agyOk ? (agyIsShim ? '⚠️ NPM shim detected (Native .exe recommended)' : '✅ Available') : '⚠️ Not found';
-  const claudeStatus = claudeOk ? (claudeIsShim ? '⚠️ NPM shim detected (Native .exe recommended)' : '✅ Available') : '⚠️ Not found';
+  const formatShimStatus = (binPath, isShim, isOk) => {
+    if (!isOk) return '⚠️ Not found';
+    if (!isShim) return '✅ Available';
+    const resolved = resolveNpmShim(binPath);
+    if (resolved) {
+      return `⚠️ npm shim (resolved via node: ${resolved.entry})`;
+    }
+    return '❌ unsupported shim';
+  };
+
+  const agyStatus = formatShimStatus(agy, agyIsShim, agyOk);
+  const claudeStatus = formatShimStatus(claude, claudeIsShim, claudeOk);
 
   console.log(`  Antigravity CLI (agy):  ${agyStatus} (${agy})`);
   console.log(`  Claude Code CLI:        ${claudeStatus} (${claude})`);
