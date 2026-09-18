@@ -457,14 +457,18 @@ async function runBenchmark3() {
   });
   const timeoutDecoupled = (!fTimeoutNoOptIn.shouldFallback) && (fTimeoutOptIn.shouldFallback && fTimeoutOptIn.nextModel === 'sonnet');
 
-  // Test 3E: Agy Print-Timeout Intercept (B1 / M1 check)
-  // Mock CLI that exits with 0, writes VERDICT: APPROVED to stdout and print timeout warning to stderr
+  // Test 3E: Agy Print-Timeout Intercept & Stdout Quote Non-Regression (Decision 2, M5, M8 check)
   const agyMockScript = `
     console.log('VERDICT: APPROVED');
     console.error('[agy] print timeout after 5m0s with turn in progress; returning partial output');
     process.exit(0);
   `;
+  const agyStdoutQuoteScript = `
+    console.log('Note: plan discussion quotes [agy] print timeout after 5m0s in text.\\nVERDICT: APPROVED');
+    process.exit(0);
+  `;
   let agyTimeoutIntercepted = false;
+  let stdoutQuoteNotTimeout = false;
   try {
     const agyMockRes = await executeReviewerAsync({
       bin: process.execPath,
@@ -476,8 +480,19 @@ async function runBenchmark3() {
     // Must force status 124 and timedOut true despite exit 0
     const agyParsed = parseVerdict(agyMockRes.stdout, agyMockRes.status, agyMockRes.timedOut);
     agyTimeoutIntercepted = agyMockRes.timedOut && agyMockRes.status === 124 && agyParsed.code === 124;
+
+    const quoteRes = await executeReviewerAsync({
+      bin: process.execPath,
+      args: ['-e', agyStdoutQuoteScript],
+      prompt: 'test',
+      stdin: true,
+      timeout: 5000,
+    });
+    const quoteParsed = parseVerdict(quoteRes.stdout, quoteRes.status, quoteRes.timedOut);
+    stdoutQuoteNotTimeout = (!quoteRes.timedOut) && quoteRes.status === 0 && quoteParsed.verdict === 'APPROVED' && quoteParsed.code === 0;
   } catch {
     agyTimeoutIntercepted = false;
+    stdoutQuoteNotTimeout = false;
   }
 
   // Test 3F: Real killProcessTree validation
@@ -505,7 +520,7 @@ async function runBenchmark3() {
     }
   }
 
-  // Test 3G: Strict CLI argument and command contracts (B1 check)
+  // Test 3G: Strict CLI argument and command contracts (Decision 2, M2, M3)
   const runnerPath = join(ROOT, 'scripts', 'runner.mjs');
   const runCli = (cliArgs) => spawnSync(process.execPath, [runnerPath, ...cliArgs], { encoding: 'utf-8', windowsHide: true });
   const resTypo = runCli(['revew']);
@@ -513,11 +528,28 @@ async function runBenchmark3() {
   const resEmpty = runCli([]);
   const resHelp = runCli(['help']);
   const resDashHelp = runCli(['--help']);
+  const resHelpReview = runCli(['--help', 'review']);
+  const resVersionReview = runCli(['-v', 'review']);
+  const resTypoHelp = runCli(['revew', '--help']);
+  const resTypoVersion = runCli(['revew', '-v']);
+  const resBogusHelp = runCli(['review', '--bogus', '--help']);
+  const resPlanHelp = runCli(['review', '--plan', '--help']);
+  const resPreflightBogus = runCli(['preflight', '--bogus']);
+  const resPreflightHelp = runCli(['preflight', '--help']);
+
   const cliContractsOk = (resTypo.status === 1) &&
                          (resExtra.status === 1) &&
                          (resEmpty.status === 1) &&
                          (resHelp.status === 0) &&
-                         (resDashHelp.status === 0);
+                         (resDashHelp.status === 0) &&
+                         (resHelpReview.status === 0) &&
+                         (resVersionReview.status === 0) &&
+                         (resTypoHelp.status === 1) &&
+                         (resTypoVersion.status === 1) &&
+                         (resBogusHelp.status === 1) &&
+                         (resPlanHelp.status === 1) &&
+                         (resPreflightBogus.status === 1) &&
+                         (resPreflightHelp.status === 0);
 
   // Test 3H: Timeout Guarantee with stdio kept open by grandchild (B2 check)
   let timeoutGuaranteed = false;
@@ -547,16 +579,16 @@ async function runBenchmark3() {
     timeoutGuaranteed = false;
   }
 
-  const passed = verdictStrict && fallbackSingleHopBounded && providerAware && timeoutDecoupled && agyTimeoutIntercepted && processKilledSuccessfully && cliContractsOk && timeoutGuaranteed;
+  const passed = verdictStrict && fallbackSingleHopBounded && providerAware && timeoutDecoupled && agyTimeoutIntercepted && stdoutQuoteNotTimeout && processKilledSuccessfully && cliContractsOk && timeoutGuaranteed;
 
   recordResult({
     name: 'Provider-Aware Fallback & Agy Timeout Intercept (decideFallback, executeReviewerAsync)',
     category: 'RESILIENCE',
     passed,
-    metric: `Verdict Strict: ${verdictStrict} | 1-Hop: ${fallbackSingleHopBounded} | Timeout Decoupled: ${timeoutDecoupled} | Agy Timeout: ${agyTimeoutIntercepted} | Tree Kill: ${processKilledSuccessfully} | CLI Contracts (B1): ${cliContractsOk} | Timeout Guarantee (B2): ${timeoutGuaranteed}`,
+    metric: `Verdict Strict: ${verdictStrict} | 1-Hop: ${fallbackSingleHopBounded} | Timeout Decoupled: ${timeoutDecoupled} | Agy Timeout: ${agyTimeoutIntercepted} | Quote OK: ${stdoutQuoteNotTimeout} | Tree Kill: ${processKilledSuccessfully} | CLI Contracts (Decision 2): ${cliContractsOk} | Timeout Guarantee (B2): ${timeoutGuaranteed}`,
     baseline: 'Failing open on cited APPROVED, treating agy partial output as exit 0, or mixing model providers',
     target: 'Strict last-match verdict parsing, agy print timeout forced to 124, timeout-fallback decoupling, and bounded process guarantee',
-    details: 'Verified real decideFallback against loops (M4), agy timeout intercept (B1), CLI contract validation (B1), and stdio timeout guarantee (B2).',
+    details: 'Verified real decideFallback against loops (M4), agy timeout intercept (B1), stdout quote non-regression (M8), CLI contract validation (Decision 2), and stdio timeout guarantee (B2).',
   });
 }
 

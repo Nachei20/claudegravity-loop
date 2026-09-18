@@ -91,36 +91,36 @@ export function getExecutable(bin) {
 }
 
 export function parseArgs(args) {
-  if (args.includes('--help') || args.includes('-h') || args[0] === 'help') {
-    printUsage();
-    process.exit(0);
-  }
-  if (args.includes('--version') || args.includes('-v')) {
-    console.log(`claudegravity-loop v${PKG_VERSION}`);
-    process.exit(0);
-  }
-
   if (args.length === 0) {
     console.error("❌ Error: Missing command. Expected 'review', 'preflight', or 'help'.");
     printUsage();
     process.exit(1);
   }
 
-  const command = args[0];
-  if (command.startsWith('-')) {
-    console.error(`❌ Error: Missing command before flag '${command}'. Expected 'review', 'preflight', or 'help'.`);
+  const firstArg = args[0];
+  if (firstArg === '--help' || firstArg === '-h' || firstArg === 'help') {
+    printUsage();
+    process.exit(0);
+  }
+  if (firstArg === '--version' || firstArg === '-v') {
+    console.log(`claudegravity-loop v${PKG_VERSION}`);
+    process.exit(0);
+  }
+
+  if (firstArg.startsWith('-')) {
+    console.error(`❌ Error: Unknown flag '${firstArg}'. Expected 'review', 'preflight', or 'help'.`);
     printUsage();
     process.exit(1);
   }
 
-  if (!['review', 'preflight', 'help'].includes(command)) {
-    console.error(`❌ Error: Unknown command '${command}'. Expected 'review', 'preflight', or 'help'.`);
+  if (!['review', 'preflight'].includes(firstArg)) {
+    console.error(`❌ Error: Unknown command '${firstArg}'. Expected 'review', 'preflight', or 'help'.`);
     printUsage();
     process.exit(1);
   }
 
   const options = {
-    command,
+    command: firstArg,
     plan: 'PLAN.md',
     log: 'PLAN-REVIEW-LOG.md',
     rounds: 5,
@@ -136,16 +136,19 @@ export function parseArgs(args) {
     skipLint: false,
   };
 
+  let hasHelp = false;
+  let hasVersion = false;
+
   for (let i = 1; i < args.length; i++) {
     const arg = args[i];
 
     if (arg === '--help' || arg === '-h') {
-      printUsage();
-      process.exit(0);
+      hasHelp = true;
+      continue;
     }
     if (arg === '--version' || arg === '-v') {
-      console.log(`claudegravity-loop v${PKG_VERSION}`);
-      process.exit(0);
+      hasVersion = true;
+      continue;
     }
 
     if (arg.startsWith('--plan=')) options.plan = arg.slice(7);
@@ -241,6 +244,15 @@ export function parseArgs(args) {
       printUsage();
       process.exit(1);
     }
+  }
+
+  if (hasHelp) {
+    printUsage();
+    process.exit(0);
+  }
+  if (hasVersion) {
+    console.log(`claudegravity-loop v${PKG_VERSION}`);
+    process.exit(0);
   }
 
   // Normalize and validate host
