@@ -172,7 +172,7 @@ This automatically registers the 4 skills and bundles `scripts/runner.mjs` direc
 
 > [!WARNING]
 > * **Clean checkout required**: Always run `agy plugin import` against a clean checkout of the tag (e.g. `git checkout v1.2.0`). Importing from an active working tree copies `.git`, `PLAN.md`, audit logs, and temporary files into the global plugin cache.
-> * **`agy plugin install` not supported**: `agy plugin install` requires a remote plugin registry entry and rejects this local repository.
+> * **`agy plugin install` not supported**: `agy plugin install` rejects this repository (it expects an agy-format plugin.json in the repository root). Use `agy plugin import <path>` instead.
 > * **No symlinks / junctions**: Antigravity does not traverse filesystem junctions or symbolic links when discovering plugins or skills.
 
 ### Manual / Fallback Skill Installation

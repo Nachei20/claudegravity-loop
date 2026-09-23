@@ -53,8 +53,6 @@ export function isWindowsShim(binPath, platform = process.platform) {
 export function resolveNpmShim(binPath, { platform = process.platform, fsMock } = {}) {
   if (!binPath || platform !== 'win32') return null;
   const fsImpl = fsMock || { existsSync, readFileSync, realpathSync };
-  const pathMod = platform === 'win32' ? win32 : path;
-  const pathSep = platform === 'win32' ? win32.sep : path.sep;
 
   let targetShim = binPath;
   const lower = binPath.toLowerCase();
@@ -99,13 +97,14 @@ export function resolveNpmShim(binPath, { platform = process.platform, fsMock } 
 
   if (!relEntry) return null;
 
-  const shimDir = pathMod.dirname(targetShim);
-  const resolvedEntry = pathMod.resolve(shimDir, relEntry);
+  const shimDir = dirname(targetShim);
+  const relParts = relEntry.split(/[\\/]/);
+  const resolvedEntry = resolve(shimDir, ...relParts);
 
   if (!fsImpl.existsSync(resolvedEntry)) return null;
 
   try {
-    const realShimModules = fsImpl.realpathSync(pathMod.join(shimDir, 'node_modules')) + pathSep;
+    const realShimModules = fsImpl.realpathSync(join(shimDir, 'node_modules')) + path.sep;
     const realEntry = fsImpl.realpathSync(resolvedEntry);
     if (!realEntry.toLowerCase().startsWith(realShimModules.toLowerCase())) {
       return null; // Traversal attempt outside node_modules
@@ -115,7 +114,7 @@ export function resolveNpmShim(binPath, { platform = process.platform, fsMock } 
   }
 
   let nodeBin = process.execPath;
-  const localNode = pathMod.join(shimDir, 'node.exe');
+  const localNode = join(shimDir, 'node.exe');
   if (fsImpl.existsSync(localNode)) {
     nodeBin = localNode;
   }

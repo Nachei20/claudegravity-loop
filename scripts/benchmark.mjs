@@ -605,6 +605,7 @@ async function runBenchmark3() {
   const resTypoHelp = runCli(['revew', '--help']);
   const resTypoVersion = runCli(['revew', '-v']);
   const resBogusHelp = runCli(['review', '--bogus', '--help']);
+  const resHelpBogus = runCli(['review', '--help', '--bogus']);
   const resPlanHelp = runCli(['review', '--plan', '--help']);
   const resPreflightBogus = runCli(['preflight', '--bogus']);
   const resPreflightHelp = runCli(['preflight', '--help']);
@@ -619,6 +620,7 @@ async function runBenchmark3() {
                          (resTypoHelp.status === 1) &&
                          (resTypoVersion.status === 1) &&
                          (resBogusHelp.status === 1) &&
+                         (resHelpBogus.status === 1) &&
                          (resPlanHelp.status === 1) &&
                          (resPreflightBogus.status === 1) &&
                          (resPreflightHelp.status === 0);

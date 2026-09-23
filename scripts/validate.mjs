@@ -67,6 +67,13 @@ export function validateSkillFrontmatter(content, expectedName) {
 export function validateCiWorkflow(ciContent) {
   const validationErrors = [];
 
+  if (/\bdefaults\s*:/i.test(ciContent)) {
+    validationErrors.push("Workflow must not contain 'defaults:' configuration");
+  }
+  if (/\bshell\s*:/i.test(ciContent)) {
+    validationErrors.push("Workflow must not contain custom 'shell:' overrides");
+  }
+
   function getJobLines(content, jobId) {
     const lines = content.split(/\r?\n/);
     let inJob = false;
@@ -304,6 +311,8 @@ const negativeCiFixtures = [
   { name: 'matrix with exclude', content: realCiContent.replace('fail-fast: false', 'fail-fast: false\n      matrix:\n        exclude:\n          - os: macos-latest') },
   { name: 'matrix with include modifying os', content: realCiContent.replace('fail-fast: false', 'fail-fast: false\n      matrix:\n        include:\n          - os: custom-os') },
   { name: 'benchmark step removed', content: realCiContent.replace(/- name: Run Empirical Benchmarks[\s\S]*?run: npm run benchmark/m, '') },
+  { name: 'workflow defaults shell override', content: realCiContent.replace('permissions:\n  contents: read', 'permissions:\n  contents: read\ndefaults:\n  run:\n    shell: \'true {0}\'') },
+  { name: 'step-level shell true override', content: realCiContent.replace('run: npm test', 'shell: \'true {0}\'\n        run: npm test') },
 ];
 
 const tooLongDesc = `---\nname: test-skill\ndescription: ${'a'.repeat(1025)}\n---`;
