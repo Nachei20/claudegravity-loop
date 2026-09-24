@@ -4,6 +4,22 @@ All notable changes to `claudegravity-loop` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-09-18
+
+### Added
+- **Strict CI Workflow Whitelist Validation**: `scripts/validate.mjs` enforces a strict whitelist of approved jobs (`test` matrix and `test-on-node` aggregator) in `.github/workflows/ci.yml`. Enforces that test commands cannot be chained with bypasses (`; exit 0`, `|| true`), forbids `continue-on-error`, restricts step-level `if:` conditions, and validates tamper-resistance against 13 negative fixtures.
+- **Skill Description Limit**: Enforces a 1024-character maximum length on skill descriptions in `scripts/validate.mjs` to maintain compatibility with agent CLI registries.
+- **CLI Precedence & Contract Enforcement**: `parseArgs` in `scripts/runner.mjs` enforces strict argument evaluation order: unknown subcommands and missing command errors exit with code 1 before evaluating global `--help`, while subcommand flag errors (e.g. `review --bogus --help` or `review --plan --help`) exit with code 1 before displaying usage.
+- **Scoped `-` Operator in Preflight Linter**: Equation segmentation in `extractEquationSegment` treats `-` as a term-connecting operator only when adjacent to recognized budget units (`cm`, `mm`, `px`, `pt`, `%`) and preceded by a non-digit character. Prevents false positive cuts on ranges (`Columns 3 - 4`, `Márgenes 1-2cm`, `1 - 2cm`) and ISO dates (`Sprint 2026-09-14`).
+- **Safe XML Entity Decoding**: `decodeXmlEntities` validates code point ranges (`0 < cp <= 0x10FFFF && !(0xD800 <= cp <= 0xDFFF)`), eliminating `RangeError` on invalid numeric entities (`&#x110000;`, `&#99999999;`), preserving surrogates (`&#xD800;`) and unmapped named entities (`&foo;`), and preserving `&#0;` / `&#x0;` literally to eliminate NUL byte injection.
+- **Windows npm Shim Resolution**: Pure function `resolveNpmShim` resolves Windows npm shims (`.cmd`, `.bat`, and extensionless shims with `.cmd` or `sh` siblings) directly via `node.exe` with `{ shell: false }`, preventing `cmd.exe` command injection. Supports `nvm4w` junctions and directory symlinks via `realpathSync` containment checks and rejects path traversal attempts (`..\..\evil.js`).
+- **Preflight Diagnostics Shim Status**: `runner.mjs preflight` displays detailed resolution diagnostics for Windows shims (`⚠️ npm shim (resolved via node: <entry>)` for resolvable shims vs `❌ unsupported shim` for unresolvable shims).
+- **Refined Track Detection**: `detectTrack` requires directory path separators (`/` or `\`) or explicit build/test commands to qualify file extensions as code indicators. Prevents presentation plans mentioning bare filenames (e.g. `` `test.py` `` or `` `Node.js` ``) from being misclassified as code tracks.
+
+### Changed
+- **Installation & Documentation**: Added official support for `agy plugin import <path>` for Google Antigravity 1.2.x, bundled plugin updates, and documented the `--skip-lint` escape hatch for subtraction expressions containing intermediate textual labels.
+- **Version Synchronization**: Synchronized package version to 1.2.0 across `package.json`, `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `scripts/runner.mjs`, and `scripts/benchmark.mjs`.
+
 ---
 
 ## [1.1.1] - 2026-09-14

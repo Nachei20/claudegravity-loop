@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 
 /**
- * Claudegravity Loop Benchmark Suite — Hardened v1.1.1
+ * Claudegravity Loop Benchmark Suite — Hardened v1.2.0
  * Empirically validates the performance, stability, and security gains of Claudegravity Loop.
- * Directly exercises and validates real functions from runner.mjs against mutation testing (M1-M6).
+ * Directly exercises and validates real functions from runner.mjs against mutation testing (M1-M12).
  * Standard library zero-dependency execution.
  */
 
 import { spawn, spawnSync } from 'node:child_process';
 import https from 'node:https';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync, mkdirSync, symlinkSync } from 'node:fs';
 import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
@@ -27,6 +27,7 @@ import {
   getExecutable,
   pickExecutable,
   isWindowsShim,
+  resolveNpmShim,
   decodeXmlEntities,
   FALLBACK_SIGNALS,
 } from './runner.mjs';
@@ -34,10 +35,10 @@ import {
 const __dirname = import.meta.dirname ?? dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
-let PKG_VERSION = '1.1.1';
+let PKG_VERSION = '1.2.0';
 try {
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'));
-  PKG_VERSION = pkg.version || '1.1.1';
+  PKG_VERSION = pkg.version || '1.2.0';
 } catch {
   PKG_VERSION = 'unknown';
 }
@@ -212,6 +213,7 @@ async function runBenchmark2() {
   let windowsExePreferred = true;
   let pickExecutableOk = false;
   let shimDetectionOk = false;
+  let shimResolutionOk = false;
   const initialParentEnv = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
 
   try {
@@ -365,6 +367,76 @@ async function runBenchmark2() {
                             (winDotPathShim === true) &&
                             (winDotPathExe === false);
 
+          // 8. resolveNpmShim pure resolution, nvm4w junction, traversal immunity (M9, M10, M11 check)
+          const shimFixtureDir = mkdtempSync(join(tmpDir, 'shim-fixtures-'));
+          try {
+            const realStore = join(shimFixtureDir, 'realStore');
+            const linkDir = join(shimFixtureDir, 'linkDir');
+            mkdirSync(join(realStore, 'node_modules', 'test-pkg'), { recursive: true });
+            writeFileSync(join(realStore, 'node_modules', 'test-pkg', 'cli.js'), 'console.log("VERDICT: APPROVED");');
+
+            try {
+              symlinkSync(realStore, linkDir, 'junction');
+            } catch {
+              symlinkSync(realStore, linkDir, 'dir');
+            }
+
+            writeFileSync(join(linkDir, 'tool.cmd'), '@echo off\r\n"%dp0%\\node_modules\\test-pkg\\cli.js" %*\r\n');
+            writeFileSync(join(linkDir, 'tool'), '#!/bin/sh\n"$basedir/node_modules/test-pkg/cli.js" "$@"\n');
+
+            const shOnlyDir = join(shimFixtureDir, 'sh-only');
+            mkdirSync(join(shOnlyDir, 'node_modules', 'test-pkg'), { recursive: true });
+            writeFileSync(join(shOnlyDir, 'node_modules', 'test-pkg', 'cli.js'), 'console.log("VERDICT: APPROVED");');
+            writeFileSync(join(shOnlyDir, 'sh-tool'), '#!/bin/sh\n"$basedir/node_modules/test-pkg/cli.js" "$@"\n');
+
+            writeFileSync(join(linkDir, 'evil.cmd'), '@echo off\r\n"%dp0%\\node_modules\\..\\..\\evil.js" %*\r\n');
+            writeFileSync(join(shimFixtureDir, 'evil.js'), 'console.log("evil");');
+
+            writeFileSync(join(linkDir, 'broken.cmd'), '@echo off\r\n"%dp0%\\node_modules\\missing\\cli.js" %*\r\n');
+
+            const resCmd = resolveNpmShim ? resolveNpmShim(join(linkDir, 'tool.cmd'), { platform: 'win32' }) : null;
+            const resExtless = resolveNpmShim ? resolveNpmShim(join(linkDir, 'tool'), { platform: 'win32' }) : null;
+            const resSh = resolveNpmShim ? resolveNpmShim(join(shOnlyDir, 'sh-tool'), { platform: 'win32' }) : null;
+            const resEvil = resolveNpmShim ? resolveNpmShim(join(linkDir, 'evil.cmd'), { platform: 'win32' }) : true;
+            const resBroken = resolveNpmShim ? resolveNpmShim(join(linkDir, 'broken.cmd'), { platform: 'win32' }) : true;
+            const resLinux = resolveNpmShim ? resolveNpmShim(join(linkDir, 'tool.cmd'), { platform: 'linux' }) : true;
+
+            const junctionOk = resCmd !== null && resCmd.entry.toLowerCase().includes('test-pkg');
+            const extlessOk = resExtless !== null && resExtless.entry.toLowerCase().includes('test-pkg');
+            const shOk = resSh !== null && resSh.entry.toLowerCase().includes('test-pkg');
+            const traversalBlocked = resEvil === null;
+            const brokenBlocked = resBroken === null;
+            const linuxIgnored = resLinux === null;
+
+            let liveShimOk = true;
+            if (process.platform === 'win32') {
+              try {
+                const execRes = await executeReviewerAsync({
+                  bin: join(linkDir, 'tool.cmd'),
+                  args: [],
+                  prompt: 'test',
+                  stdin: true,
+                  timeout: 5000,
+                });
+                const evilRes = await executeReviewerAsync({
+                  bin: join(linkDir, 'evil.cmd'),
+                  args: [],
+                  prompt: 'test',
+                  stdin: true,
+                  timeout: 5000,
+                });
+                liveShimOk = (execRes.status === 0 && execRes.stdout.includes('VERDICT: APPROVED')) &&
+                             (evilRes.status === 5 && evilRes.stderr.includes('[SECURITY ERROR]'));
+              } catch {
+                liveShimOk = false;
+              }
+            }
+
+            shimResolutionOk = junctionOk && extlessOk && shOk && traversalBlocked && brokenBlocked && linuxIgnored && liveShimOk;
+          } catch {
+            shimResolutionOk = false;
+          }
+
           server.close(() => resolveSuite());
         } catch (err) {
           server.close(() => rejectSuite(err));
@@ -376,16 +448,16 @@ async function runBenchmark2() {
   }
 
   const parentEnvUnpolluted = (process.env.NODE_TLS_REJECT_UNAUTHORIZED === initialParentEnv);
-  const passed = defaultRejected && caseScrubbingWorked && optInAllowed && parentEnvUnpolluted && cmdInjectionImmune && windowsExePreferred && pickExecutableOk && shimDetectionOk;
+  const passed = defaultRejected && caseScrubbingWorked && optInAllowed && parentEnvUnpolluted && cmdInjectionImmune && windowsExePreferred && pickExecutableOk && shimDetectionOk && shimResolutionOk;
 
   recordResult({
     name: 'Scoped TLS Invariant & Case-Insensitive Env Scrubbing (buildChildEnv)',
     category: 'SECURITY',
     passed,
-    metric: `Default Reject: ${defaultRejected ? 'YES' : 'NO'} | Casing Scrub (D7): ${caseScrubbingWorked ? 'YES' : 'NO'} | Opt-in Success: ${optInAllowed ? 'YES' : 'NO'} | Injection Immune: ${cmdInjectionImmune ? 'YES' : 'NO'} | Exe Preferred: ${windowsExePreferred ? 'YES' : 'NO'} | Pick Exe (M4): ${pickExecutableOk} | Shim Guard (R1/I3): ${shimDetectionOk}`,
+    metric: `Default Reject: ${defaultRejected ? 'YES' : 'NO'} | Casing Scrub (D7): ${caseScrubbingWorked ? 'YES' : 'NO'} | Opt-in Success: ${optInAllowed ? 'YES' : 'NO'} | Injection Immune: ${cmdInjectionImmune ? 'YES' : 'NO'} | Exe Preferred: ${windowsExePreferred ? 'YES' : 'NO'} | Pick Exe (M4): ${pickExecutableOk} | Shim Guard (R1/I3): ${shimDetectionOk} | Shim Resolve (M9-M11): ${shimResolutionOk}`,
     baseline: 'Unconditional global TLS bypass, casing leak, or cmd.exe shell injection vulnerability',
     target: 'Default-secure TLS, case-insensitive scrubbing, and complete cmd.exe shell injection elimination',
-    details: 'Verified real buildChildEnv against casing variations (M1), bypass (M2), batch shim injection immunity, .exe preference (M4), platform-scoped shim guard (R1), and dot-path shim detection (I3).',
+    details: 'Verified real buildChildEnv against casing variations (M1), bypass (M2), batch shim injection immunity, .exe preference (M4), platform-scoped shim guard (R1), dot-path shim detection (I3), and safe npm shim resolution with nvm4w junctions and traversal rejection (M9-M11).',
   });
 }
 
@@ -457,14 +529,18 @@ async function runBenchmark3() {
   });
   const timeoutDecoupled = (!fTimeoutNoOptIn.shouldFallback) && (fTimeoutOptIn.shouldFallback && fTimeoutOptIn.nextModel === 'sonnet');
 
-  // Test 3E: Agy Print-Timeout Intercept (B1 / M1 check)
-  // Mock CLI that exits with 0, writes VERDICT: APPROVED to stdout and print timeout warning to stderr
+  // Test 3E: Agy Print-Timeout Intercept & Stdout Quote Non-Regression (Decision 2, M5, M8 check)
   const agyMockScript = `
     console.log('VERDICT: APPROVED');
     console.error('[agy] print timeout after 5m0s with turn in progress; returning partial output');
     process.exit(0);
   `;
+  const agyStdoutQuoteScript = `
+    console.log('Note: plan discussion quotes [agy] print timeout after 5m0s in text.\\nVERDICT: APPROVED');
+    process.exit(0);
+  `;
   let agyTimeoutIntercepted = false;
+  let stdoutQuoteNotTimeout = false;
   try {
     const agyMockRes = await executeReviewerAsync({
       bin: process.execPath,
@@ -476,8 +552,19 @@ async function runBenchmark3() {
     // Must force status 124 and timedOut true despite exit 0
     const agyParsed = parseVerdict(agyMockRes.stdout, agyMockRes.status, agyMockRes.timedOut);
     agyTimeoutIntercepted = agyMockRes.timedOut && agyMockRes.status === 124 && agyParsed.code === 124;
+
+    const quoteRes = await executeReviewerAsync({
+      bin: process.execPath,
+      args: ['-e', agyStdoutQuoteScript],
+      prompt: 'test',
+      stdin: true,
+      timeout: 5000,
+    });
+    const quoteParsed = parseVerdict(quoteRes.stdout, quoteRes.status, quoteRes.timedOut);
+    stdoutQuoteNotTimeout = (!quoteRes.timedOut) && quoteRes.status === 0 && quoteParsed.verdict === 'APPROVED' && quoteParsed.code === 0;
   } catch {
     agyTimeoutIntercepted = false;
+    stdoutQuoteNotTimeout = false;
   }
 
   // Test 3F: Real killProcessTree validation
@@ -505,7 +592,7 @@ async function runBenchmark3() {
     }
   }
 
-  // Test 3G: Strict CLI argument and command contracts (B1 check)
+  // Test 3G: Strict CLI argument and command contracts (Decision 2, M2, M3)
   const runnerPath = join(ROOT, 'scripts', 'runner.mjs');
   const runCli = (cliArgs) => spawnSync(process.execPath, [runnerPath, ...cliArgs], { encoding: 'utf-8', windowsHide: true });
   const resTypo = runCli(['revew']);
@@ -513,11 +600,30 @@ async function runBenchmark3() {
   const resEmpty = runCli([]);
   const resHelp = runCli(['help']);
   const resDashHelp = runCli(['--help']);
+  const resHelpReview = runCli(['--help', 'review']);
+  const resVersionReview = runCli(['-v', 'review']);
+  const resTypoHelp = runCli(['revew', '--help']);
+  const resTypoVersion = runCli(['revew', '-v']);
+  const resBogusHelp = runCli(['review', '--bogus', '--help']);
+  const resHelpBogus = runCli(['review', '--help', '--bogus']);
+  const resPlanHelp = runCli(['review', '--plan', '--help']);
+  const resPreflightBogus = runCli(['preflight', '--bogus']);
+  const resPreflightHelp = runCli(['preflight', '--help']);
+
   const cliContractsOk = (resTypo.status === 1) &&
                          (resExtra.status === 1) &&
                          (resEmpty.status === 1) &&
                          (resHelp.status === 0) &&
-                         (resDashHelp.status === 0);
+                         (resDashHelp.status === 0) &&
+                         (resHelpReview.status === 0) &&
+                         (resVersionReview.status === 0) &&
+                         (resTypoHelp.status === 1) &&
+                         (resTypoVersion.status === 1) &&
+                         (resBogusHelp.status === 1) &&
+                         (resHelpBogus.status === 1) &&
+                         (resPlanHelp.status === 1) &&
+                         (resPreflightBogus.status === 1) &&
+                         (resPreflightHelp.status === 0);
 
   // Test 3H: Timeout Guarantee with stdio kept open by grandchild (B2 check)
   let timeoutGuaranteed = false;
@@ -547,16 +653,16 @@ async function runBenchmark3() {
     timeoutGuaranteed = false;
   }
 
-  const passed = verdictStrict && fallbackSingleHopBounded && providerAware && timeoutDecoupled && agyTimeoutIntercepted && processKilledSuccessfully && cliContractsOk && timeoutGuaranteed;
+  const passed = verdictStrict && fallbackSingleHopBounded && providerAware && timeoutDecoupled && agyTimeoutIntercepted && stdoutQuoteNotTimeout && processKilledSuccessfully && cliContractsOk && timeoutGuaranteed;
 
   recordResult({
     name: 'Provider-Aware Fallback & Agy Timeout Intercept (decideFallback, executeReviewerAsync)',
     category: 'RESILIENCE',
     passed,
-    metric: `Verdict Strict: ${verdictStrict} | 1-Hop: ${fallbackSingleHopBounded} | Timeout Decoupled: ${timeoutDecoupled} | Agy Timeout: ${agyTimeoutIntercepted} | Tree Kill: ${processKilledSuccessfully} | CLI Contracts (B1): ${cliContractsOk} | Timeout Guarantee (B2): ${timeoutGuaranteed}`,
+    metric: `Verdict Strict: ${verdictStrict} | 1-Hop: ${fallbackSingleHopBounded} | Timeout Decoupled: ${timeoutDecoupled} | Agy Timeout: ${agyTimeoutIntercepted} | Quote OK: ${stdoutQuoteNotTimeout} | Tree Kill: ${processKilledSuccessfully} | CLI Contracts (Decision 2): ${cliContractsOk} | Timeout Guarantee (B2): ${timeoutGuaranteed}`,
     baseline: 'Failing open on cited APPROVED, treating agy partial output as exit 0, or mixing model providers',
     target: 'Strict last-match verdict parsing, agy print timeout forced to 124, timeout-fallback decoupling, and bounded process guarantee',
-    details: 'Verified real decideFallback against loops (M4), agy timeout intercept (B1), CLI contract validation (B1), and stdio timeout guarantee (B2).',
+    details: 'Verified real decideFallback against loops (M4), agy timeout intercept (B1), stdout quote non-regression (M8), CLI contract validation (Decision 2), and stdio timeout guarantee (B2).',
   });
 }
 
@@ -584,6 +690,12 @@ async function runBenchmark4() {
     'Layout: col A: 20cm + col B: 30cm = 50cm',
     'Column 2 (40cm): 20cm + 20cm = 40cm',
     'Poster 90cm: 20cm + 30cm = 50cm',
+    // v1.2.0 Decisión 3 test cases
+    'Columns 3-4 (40cm): 20cm + 20cm = 40cm',
+    'Columns 3 - 4 (40cm): 20cm + 20cm = 40cm',
+    'Sprint 2026-09-14 (90cm): 20cm + 30cm = 50cm',
+    'Márgenes 1-2cm: 5cm + 5cm = 10cm',
+    'Márgenes 1 - 2cm: 5cm + 5cm = 10cm',
   ];
 
   const invalidCases = [
@@ -599,6 +711,12 @@ async function runBenchmark4() {
     'Layout: col A: 20cm + col B: 30cm = 60cm',
     'Column 2 (40cm): 20cm + 20cm = 50cm',
     'Poster 90cm: 20cm + 30cm = 60cm',
+    // v1.2.0 Decisión 3 test cases
+    'Columns 3-4 (40cm): 20cm + 30cm = 40cm',
+    'Columns 3 - 4 (40cm): 20cm + 30cm = 40cm',
+    'Sprint 2026-09-14 (90cm): 20cm + 40cm = 50cm',
+    'Márgenes 1-2cm: 5cm + 5cm = 12cm',
+    'Gap: 1.5cm - 0.5cm = 2.0cm',
   ];
 
   const validCasesOk = validCases.every((text) => runPreflightLinter(text).ok);
@@ -627,7 +745,7 @@ async function runBenchmark4() {
     metric: `Audit Matrix (${validCases.length + invalidCases.length} cases): ${linterMatrixOk} | Tilde Fence: ${tildeFenceOk} | Plan Linter: ${repoPlanOk} (${planDuration}ms)`,
     baseline: 'Crashing on N>=3 operands, missing labeled cm budgets, or skipping lines with non-linear tokens',
     target: 'Linear sub-millisecond linting with dual-locale (US/EU) parsing and isolated equation segmentation',
-    details: 'Verified 23 audit cases: non-linear skips, thousands dots/commas, decimal commas, dual locale US/EU, and clean clone resilience.',
+    details: `Verified ${validCases.length + invalidCases.length} audit cases: scoped minus operator, ranges, ISO dates, non-linear skips, thousands dots/commas, decimal commas, dual locale US/EU, and clean clone resilience.`,
   });
 }
 
@@ -637,18 +755,22 @@ async function runBenchmark4() {
 async function runBenchmark5() {
   console.log('\n📊 Running Benchmark 5: Dual-Track Detection & Dynamic XML Structured Extraction...');
 
-  // Test 5A: Dual-Track Classification (M1 / M5 check)
+  // Test 5A: Dual-Track Classification (M1 / M5 / M12 check)
   const samplePlanText = `# Implementation Plan\n\n\`\`\`bash\ngit worktree add -b feat/task ../task-worktree\nnpm test\n\`\`\`\n`;
   const planText = existsSync(resolve(ROOT, 'PLAN.md')) ? readFileSync(resolve(ROOT, 'PLAN.md'), 'utf-8') : samplePlanText;
   const trackRepoPlan = detectTrack(planText);
   const trackNodePoster = detectTrack('Design the conference poster in poster.pptx about Node.js adoption');
   const trackBashPoster = detectTrack('Poster in poster.pptx with column layout:\n```bash\npdftoppm -png -r 150 poster.pdf page\n```');
   const trackCodeProof = detectTrack('Fix TypeScript bug with PROOF_CMD: npm test and src/index.ts');
+  const trackDeckBare = detectTrack('Plan de diapositivas en deck.pptx: revisar `test.py` y adopción de Node.js');
+  const trackDeckPath = detectTrack('Plan de backend en deck.pptx: modificar src/test.py y correr tests');
 
   const trackDetectionOk = (trackRepoPlan === 'code') &&
                            (trackNodePoster === 'artifact') &&
                            (trackBashPoster === 'artifact') &&
-                           (trackCodeProof === 'code');
+                           (trackCodeProof === 'code') &&
+                           (trackDeckBare === 'artifact') &&
+                           (trackDeckPath === 'code');
 
   // Test 5B: Real XML Artifact dynamically parsed via extractStructuredArtifact (I4 check)
   const rawXmlArtifact = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -690,16 +812,36 @@ async function runBenchmark5() {
   const artifactNoPres = extractStructuredArtifact(rawXmlArtifact, {});
   const slideDimNullWithoutPres = (artifactNoPres.slide_dimensions === null);
 
-  const passed = trackDetectionOk && extractionValid && tokenSavingsOk && xmlEntityDecodeOk && slideDimNullWithoutPres;
+  // Test 5E: Safe XML entity decoding without RangeError or NUL injection (Decisión 4, M6, M7)
+  const safeEntitiesOk = (() => {
+    if (!decodeXmlEntities) return false;
+    if (decodeXmlEntities('&#65; &#x42;') !== 'A B') return false;
+    const nulDecoded = decodeXmlEntities('&#0; &#x0;');
+    if (nulDecoded.includes('\0') || nulDecoded !== '&#0; &#x0;') return false;
+    try {
+      if (decodeXmlEntities('&#x110000; &#99999999;') !== '&#x110000; &#99999999;') return false;
+    } catch {
+      return false;
+    }
+    try {
+      if (decodeXmlEntities('&#xD800;') !== '&#xD800;') return false;
+    } catch {
+      return false;
+    }
+    if (decodeXmlEntities('&unknown;') !== '&unknown;') return false;
+    return true;
+  })();
+
+  const passed = trackDetectionOk && extractionValid && tokenSavingsOk && xmlEntityDecodeOk && slideDimNullWithoutPres && safeEntitiesOk;
 
   recordResult({
     name: 'Dual-Track Heuristic & Dynamic Artifact Extraction (extractStructuredArtifact)',
     category: 'TOKENOMICS',
     passed,
-    metric: `Track: ${trackDetectionOk} | Shapes: ${structuredData.shape_count} | Entities (M1): ${xmlEntityDecodeOk} | Dim Null (M4): ${slideDimNullWithoutPres} | Savings: ${tokenSavingsPercent}%`,
+    metric: `Track: ${trackDetectionOk} | Shapes: ${structuredData.shape_count} | Entities (M1): ${xmlEntityDecodeOk} | Safe Entities (M6/M7): ${safeEntitiesOk} | Dim Null (M4): ${slideDimNullWithoutPres} | Savings: ${tokenSavingsPercent}%`,
     baseline: 'Classifying prose plans as code, blind slicing to 10 shapes, or unescaped XML entities',
     target: 'Precise track classification, entity decoding, and >= 40% token reduction via complete structured extraction',
-    details: 'Verified real extractStructuredArtifact deriving 40 shapes/texts, single-pass entity decoding (M1), and slide dimension preservation (M4).',
+    details: 'Verified real extractStructuredArtifact deriving 40 shapes/texts, single-pass entity decoding (M1), safe XML entities without NUL or RangeError (M6/M7), and slide dimension preservation (M4).',
   });
 }
 

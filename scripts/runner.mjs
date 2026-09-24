@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 
 /**
- * Claudegravity Loop Runner — Hardened v1.1.1
+ * Claudegravity Loop Runner — Hardened v1.2.0
  * Standard-library zero-dependency CLI adapter for automating cross-model review rounds.
  * Node.js 18+ (Windows, macOS, Linux).
  */
 
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, realpathSync } from 'node:fs';
-import { dirname, resolve, join, basename, extname, win32 } from 'node:path';
+import path, { dirname, resolve, join, basename, extname, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import process from 'node:process';
@@ -16,10 +16,10 @@ import process from 'node:process';
 const __dirname = import.meta.dirname ?? dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
-let PKG_VERSION = '1.1.1';
+let PKG_VERSION = '1.2.0';
 try {
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'));
-  PKG_VERSION = pkg.version || '1.1.1';
+  PKG_VERSION = pkg.version || '1.2.0';
 } catch {
   PKG_VERSION = 'unknown';
 }
@@ -48,6 +48,78 @@ export function isWindowsShim(binPath, platform = process.platform) {
   const base = win32.basename(binPath).toLowerCase();
   const ext = win32.extname(base);
   return ext === '' || ext === '.cmd' || ext === '.bat' || ext === '.ps1';
+}
+
+export function resolveNpmShim(binPath, { platform = process.platform, fsMock } = {}) {
+  if (!binPath || platform !== 'win32') return null;
+  const fsImpl = fsMock || { existsSync, readFileSync, realpathSync };
+
+  let targetShim = binPath;
+  const lower = binPath.toLowerCase();
+
+  if (lower.endsWith('.cmd') || lower.endsWith('.bat')) {
+    targetShim = binPath;
+  } else if (lower.endsWith('.exe')) {
+    return null;
+  } else {
+    // Win32 where.exe often returns extensionless shim first
+    const cmdSibling = `${binPath}.cmd`;
+    if (fsImpl.existsSync(cmdSibling)) {
+      targetShim = cmdSibling;
+    } else if (fsImpl.existsSync(binPath)) {
+      targetShim = binPath;
+    } else {
+      return null;
+    }
+  }
+
+  let content;
+  try {
+    content = fsImpl.readFileSync(targetShim, 'utf8').slice(0, 8192);
+  } catch {
+    return null;
+  }
+
+  let relEntry = null;
+  // Match .cmd shims: %dp0%\node_modules\... or %~dp0\node_modules\...
+  const cmdMatches = [...content.matchAll(/%(?:~dp0|dp0%)[\\/](node_modules[\\/][^"'\r\n]+)/gi)];
+  if (cmdMatches.length > 0) {
+    const jsMatch = cmdMatches.find((m) => /\.(?:m?js|cjs)$/i.test(m[1])) || cmdMatches[cmdMatches.length - 1];
+    relEntry = jsMatch[1];
+  } else {
+    // Match sh shims: $basedir/node_modules/...
+    const shMatches = [...content.matchAll(/\$basedir[\\/](node_modules[\\/][^"'\r\n]+)/gi)];
+    if (shMatches.length > 0) {
+      const jsMatch = shMatches.find((m) => /\.(?:m?js|cjs)$/i.test(m[1])) || shMatches[shMatches.length - 1];
+      relEntry = jsMatch[1];
+    }
+  }
+
+  if (!relEntry) return null;
+
+  const shimDir = dirname(targetShim);
+  const relParts = relEntry.split(/[\\/]/);
+  const resolvedEntry = resolve(shimDir, ...relParts);
+
+  if (!fsImpl.existsSync(resolvedEntry)) return null;
+
+  try {
+    const realShimModules = fsImpl.realpathSync(join(shimDir, 'node_modules')) + path.sep;
+    const realEntry = fsImpl.realpathSync(resolvedEntry);
+    if (!realEntry.toLowerCase().startsWith(realShimModules.toLowerCase())) {
+      return null; // Traversal attempt outside node_modules
+    }
+  } catch {
+    return null;
+  }
+
+  let nodeBin = process.execPath;
+  const localNode = join(shimDir, 'node.exe');
+  if (fsImpl.existsSync(localNode)) {
+    nodeBin = localNode;
+  }
+
+  return { bin: nodeBin, entry: resolvedEntry };
 }
 
 export function getExecutable(bin) {
@@ -91,36 +163,36 @@ export function getExecutable(bin) {
 }
 
 export function parseArgs(args) {
-  if (args.includes('--help') || args.includes('-h') || args[0] === 'help') {
-    printUsage();
-    process.exit(0);
-  }
-  if (args.includes('--version') || args.includes('-v')) {
-    console.log(`claudegravity-loop v${PKG_VERSION}`);
-    process.exit(0);
-  }
-
   if (args.length === 0) {
     console.error("❌ Error: Missing command. Expected 'review', 'preflight', or 'help'.");
     printUsage();
     process.exit(1);
   }
 
-  const command = args[0];
-  if (command.startsWith('-')) {
-    console.error(`❌ Error: Missing command before flag '${command}'. Expected 'review', 'preflight', or 'help'.`);
+  const firstArg = args[0];
+  if (firstArg === '--help' || firstArg === '-h' || firstArg === 'help') {
+    printUsage();
+    process.exit(0);
+  }
+  if (firstArg === '--version' || firstArg === '-v') {
+    console.log(`claudegravity-loop v${PKG_VERSION}`);
+    process.exit(0);
+  }
+
+  if (firstArg.startsWith('-')) {
+    console.error(`❌ Error: Unknown flag '${firstArg}'. Expected 'review', 'preflight', or 'help'.`);
     printUsage();
     process.exit(1);
   }
 
-  if (!['review', 'preflight', 'help'].includes(command)) {
-    console.error(`❌ Error: Unknown command '${command}'. Expected 'review', 'preflight', or 'help'.`);
+  if (!['review', 'preflight'].includes(firstArg)) {
+    console.error(`❌ Error: Unknown command '${firstArg}'. Expected 'review', 'preflight', or 'help'.`);
     printUsage();
     process.exit(1);
   }
 
   const options = {
-    command,
+    command: firstArg,
     plan: 'PLAN.md',
     log: 'PLAN-REVIEW-LOG.md',
     rounds: 5,
@@ -136,16 +208,19 @@ export function parseArgs(args) {
     skipLint: false,
   };
 
+  let hasHelp = false;
+  let hasVersion = false;
+
   for (let i = 1; i < args.length; i++) {
     const arg = args[i];
 
     if (arg === '--help' || arg === '-h') {
-      printUsage();
-      process.exit(0);
+      hasHelp = true;
+      continue;
     }
     if (arg === '--version' || arg === '-v') {
-      console.log(`claudegravity-loop v${PKG_VERSION}`);
-      process.exit(0);
+      hasVersion = true;
+      continue;
     }
 
     if (arg.startsWith('--plan=')) options.plan = arg.slice(7);
@@ -243,6 +318,15 @@ export function parseArgs(args) {
     }
   }
 
+  if (hasHelp) {
+    printUsage();
+    process.exit(0);
+  }
+  if (hasVersion) {
+    console.log(`claudegravity-loop v${PKG_VERSION}`);
+    process.exit(0);
+  }
+
   // Normalize and validate host
   options.host = (options.host || 'claude').toLowerCase();
   if (options.host !== 'claude' && options.host !== 'antigravity') {
@@ -266,9 +350,7 @@ export function detectTrack(planContent, requestedTrack = 'auto') {
     /\bgit\s+worktree\b/i.test(planContent) ||
     /\b(?:npm|pnpm|yarn|bun)\s+(?:test|run|install|build)\b/i.test(planContent) ||
     /\b(?:pytest|cargo\s+(?:test|build)|go\s+(?:test|build))\b/i.test(planContent) ||
-    /(?:`[^`]*[/\\][\w-]+\.(?:ts|js|mjs|cjs|py|go|rs|cpp|c|java|cs|sh|rb|php)\b[^`]*`)/i.test(planContent) ||
-    /(?:[/\\](?:src|lib|test|tests|scripts)[/\\][\w-]+\.(?:ts|js|mjs|cjs|py|go|rs|cpp|c|java|cs|sh)\b)/i.test(planContent) ||
-    /(?:^|\s)[\w-]+\.(?:ts|py|go|rs|cpp|java|cs)\b/i.test(planContent);
+    /(?:^|\s|`)(?:[\w.-]+[/\\])+[\w.-]+\.(?:ts|js|mjs|cjs|py|go|rs|cpp|c|java|cs|sh|rb|php)\b/i.test(planContent);
 
   const artifactPatterns = /\.(?:pptx|pdf|docx|xlsx|svg|drawio|cad)\b/i;
   const isArtifactDeliverable = artifactPatterns.test(planContent) && !hasStrongCodeIndicators;
@@ -314,8 +396,17 @@ export function decideFallback({ currentModel, reviewer, status, output, autoFal
 export function decodeXmlEntities(str) {
   if (!str) return '';
   return str.replace(/&(?:#x([0-9a-fA-F]+)|#(\d+)|([a-zA-Z]+));/g, (match, hex, dec, named) => {
-    if (hex) return String.fromCodePoint(parseInt(hex, 16));
-    if (dec) return String.fromCodePoint(parseInt(dec, 10));
+    if (hex || dec) {
+      const cp = hex ? parseInt(hex, 16) : parseInt(dec, 10);
+      if (cp > 0 && cp <= 0x10FFFF && !(cp >= 0xD800 && cp <= 0xDFFF)) {
+        try {
+          return String.fromCodePoint(cp);
+        } catch {
+          return match;
+        }
+      }
+      return match;
+    }
     switch (named) {
       case 'lt': return '<';
       case 'gt': return '>';
@@ -396,7 +487,9 @@ export function extractEquationSegment(line) {
   for (let i = colons.length - 1; i >= 0; i--) {
     const colIdx = colons[i].index;
     const prefixBeforeCol = left.slice(0, colIdx);
-    const hasArithmeticInPrefix = /\+|\s+-\s+|\d\s*-\s*\d/.test(prefixBeforeCol);
+    const hasMinusOp = /\d\s*(?:cm|mm|px|pt|%)\s*-\s*/i.test(prefixBeforeCol) ||
+                       /(?:^|[^\d\s])\s*-\s*\d+(?:[.,]\d+)?\s*(?:cm|mm|px|pt|%)/i.test(prefixBeforeCol);
+    const hasArithmeticInPrefix = /\+/.test(prefixBeforeCol) || hasMinusOp;
     if (!hasArithmeticInPrefix) {
       left = left.slice(colIdx + 1);
       break;
@@ -628,14 +721,20 @@ export function killProcessTree(pid) {
 }
 
 export async function executeReviewerAsync({ bin, args = [], prompt, env = process.env, stdin = true, timeout = 600000 }) {
-  // Proactively reject Windows batch shims (.cmd, .bat) to prevent cmd.exe command injection
-  if (process.platform === 'win32') {
-    const lowerBin = (bin || '').toLowerCase();
-    if (lowerBin.endsWith('.cmd') || lowerBin.endsWith('.bat')) {
-      const errMessage = `[SECURITY ERROR] Windows batch shims (.cmd/.bat) are rejected to prevent cmd.exe command injection. Install native binary or use native launcher.`;
+  let spawnBin = bin;
+  let spawnArgs = args;
+
+  // On Windows, resolve shims via Node without cmd.exe shell wrapper
+  if (process.platform === 'win32' && isWindowsShim(bin)) {
+    const resolved = resolveNpmShim(bin);
+    if (resolved) {
+      spawnBin = resolved.bin;
+      spawnArgs = [resolved.entry, ...args];
+    } else {
+      const errMessage = `[SECURITY ERROR] Windows batch shims (.cmd/.bat) could not be safely resolved via node. Install native binary (.exe) or ensure package is under node_modules.`;
       console.error(`\n❌ ${errMessage}`);
       return {
-        status: 1,
+        status: 5,
         stdout: '',
         stderr: errMessage,
         timedOut: false,
@@ -651,11 +750,12 @@ export async function executeReviewerAsync({ bin, args = [], prompt, env = proce
     let graceTimer = null;
     let settled = false;
 
-    const child = spawn(bin, args, {
+    const child = spawn(spawnBin, spawnArgs, {
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: process.platform !== 'win32',
       windowsHide: true,
+      shell: false,
     });
 
     const cleanupSignals = () => {
@@ -795,8 +895,18 @@ export function runPreflight(options = {}) {
   const agyIsShim = isWindowsShim(agy);
   const claudeIsShim = isWindowsShim(claude);
 
-  const agyStatus = agyOk ? (agyIsShim ? '⚠️ NPM shim detected (Native .exe recommended)' : '✅ Available') : '⚠️ Not found';
-  const claudeStatus = claudeOk ? (claudeIsShim ? '⚠️ NPM shim detected (Native .exe recommended)' : '✅ Available') : '⚠️ Not found';
+  const formatShimStatus = (binPath, isShim, isOk) => {
+    if (!isOk) return '⚠️ Not found';
+    if (!isShim) return '✅ Available';
+    const resolved = resolveNpmShim(binPath);
+    if (resolved) {
+      return `⚠️ npm shim (resolved via node: ${resolved.entry})`;
+    }
+    return '❌ unsupported shim';
+  };
+
+  const agyStatus = formatShimStatus(agy, agyIsShim, agyOk);
+  const claudeStatus = formatShimStatus(claude, claudeIsShim, claudeOk);
 
   console.log(`  Antigravity CLI (agy):  ${agyStatus} (${agy})`);
   console.log(`  Claude Code CLI:        ${claudeStatus} (${claude})`);
