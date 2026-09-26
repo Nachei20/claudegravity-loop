@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Claudegravity Loop Benchmark Suite — Hardened v1.2.0
+ * Claudegravity Loop Benchmark Suite — Hardened v1.3.0
  * Empirically validates the performance, stability, and security gains of Claudegravity Loop.
  * Directly exercises and validates real functions from runner.mjs against mutation testing (M1-M12).
  * Standard library zero-dependency execution.
@@ -9,8 +9,8 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import https from 'node:https';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync, mkdirSync, symlinkSync } from 'node:fs';
-import { resolve, join, dirname } from 'node:path';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync, mkdirSync, symlinkSync, chmodSync } from 'node:fs';
+import { resolve, join, dirname, win32, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import process from 'node:process';
@@ -30,15 +30,24 @@ import {
   resolveNpmShim,
   decodeXmlEntities,
   FALLBACK_SIGNALS,
+  parseArgs,
+  DEFAULT_AGY_FALLBACK_MODEL,
+  parseAgyModels,
+  modelsToValidate,
+  findInvalidModels,
+  rawOutputFileName,
+  formatLogPath,
+  fetchAgyModels,
+  writeRawOutput,
 } from './runner.mjs';
 
 const __dirname = import.meta.dirname ?? dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
-let PKG_VERSION = '1.2.0';
+let PKG_VERSION = '1.3.0';
 try {
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'));
-  PKG_VERSION = pkg.version || '1.2.0';
+  PKG_VERSION = pkg.version || '1.3.0';
 } catch {
   PKG_VERSION = 'unknown';
 }
@@ -846,6 +855,229 @@ async function runBenchmark5() {
 }
 
 // ---------------------------------------------------------------------------
+// Benchmark 6: Model Validation & Raw Output Separation (v1.3.0, D1-D4)
+// ---------------------------------------------------------------------------
+const AGY_MODELS_SAMPLE = [
+  'gemini-3.8-flash-high\tGemini 3.8 Flash (High)',
+  'gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)',
+  'gemini-3.8-flash-low\tGemini 3.8 Flash (Low)',
+  'gemini-3.7-flash-high\tGemini 3.7 Flash (High)',
+  'gemini-3.7-flash-medium\tGemini 3.7 Flash (Medium)',
+  'gemini-3.7-flash-low\tGemini 3.7 Flash (Low)',
+  'gemini-3.6-flash-high\tGemini 3.6 Flash (High)',
+  'gemini-3.6-flash-medium\tGemini 3.6 Flash (Medium)',
+  'gemini-3.6-flash-low\tGemini 3.6 Flash (Low)',
+  'gemini-3.1-pro-high\tGemini 3.1 Pro (High)',
+  'gemini-3.1-pro-low\tGemini 3.1 Pro (Low)',
+  'claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)',
+  'claude-opus-4-6-thinking\tClaude Opus 4.6 (Thinking)',
+  'gpt-oss-120b-medium\tGPT-OSS 120B (Medium)',
+].join('\n') + '\n';
+
+// Fake agy CLI: answers `models` with the real catalog shape and a review round with REVISE.
+const FAKE_AGY_SOURCE = `#!/usr/bin/env node
+const fs = require('fs');
+const args = process.argv.slice(2);
+if (args[0] === 'models') {
+  if (process.env.FAKE_AGY_MODELS_FAIL === '1') { process.stderr.write('network unreachable\\n'); process.exit(1); }
+  process.stdout.write(${JSON.stringify(AGY_MODELS_SAMPLE)});
+  process.exit(0);
+}
+const mIdx = args.indexOf('--model');
+const model = mIdx !== -1 ? args[mIdx + 1] : 'default';
+if (process.env.FAKE_AGY_MARKER) fs.appendFileSync(process.env.FAKE_AGY_MARKER, 'invoked:' + model + '\\n');
+if (model === process.env.FAKE_AGY_FAIL_MODEL) { process.stderr.write('rate_limit_exceeded\\n'); process.exit(1); }
+process.stdout.write('FAKE-REVIEW-BODY ' + model + '\\nVERDICT: REVISE\\n');
+process.stderr.write('FAKE-STDERR-MARKER\\n');
+process.exit(0);
+`;
+
+function createFakeAgy(baseDir) {
+  mkdirSync(baseDir, { recursive: true });
+  if (process.platform === 'win32') {
+    const pkgDir = join(baseDir, 'node_modules', 'fake-agy');
+    mkdirSync(pkgDir, { recursive: true });
+    writeFileSync(join(pkgDir, 'cli.js'), FAKE_AGY_SOURCE, 'utf-8');
+    const cmdPath = join(baseDir, 'agy.cmd');
+    writeFileSync(cmdPath, '@ECHO off\r\n"%dp0%\\node_modules\\fake-agy\\cli.js" %*\r\n', 'utf-8');
+    return cmdPath;
+  }
+  const binPath = join(baseDir, 'agy');
+  writeFileSync(binPath, FAKE_AGY_SOURCE, 'utf-8');
+  chmodSync(binPath, 0o755);
+  return binPath;
+}
+
+async function runBenchmark6() {
+  console.log('\n📊 Running Benchmark 6: Model Validation & Raw Output Separation (v1.3.0)...');
+  const failures = [];
+  const check = (label, ok) => { if (!ok) failures.push(label); return ok; };
+
+  // 6A: parseAgyModels (D1 parsing, F4)
+  const parsed = parseAgyModels(AGY_MODELS_SAMPLE);
+  check('6A parse 14 ids', parsed.length === 14 && parsed[0] === 'gemini-3.8-flash-high' && parsed[13] === 'gpt-oss-120b-medium');
+  check('6A ignore spinner/no-tab/blank', parseAgyModels('⠋ Fetching available models...\r\n\r\nno tab here\r\nok-model\tOK\r\n').join(',') === 'ok-model');
+  check('6A anchored id', parseAgyModels('bad id\tX\nbad$id\tY\n  padded-id  \tZ\n').join(',') === 'padded-id');
+  check('6A empty input', parseAgyModels('').length === 0 && parseAgyModels(undefined).length === 0);
+
+  // 6B: modelsToValidate (D1 set, T3, R2-4)
+  const ids = (list) => list.map((c) => `${c.id}@${c.source}`).join(',');
+  check('6B none', modelsToValidate({}).length === 0);
+  check('6B model only', ids(modelsToValidate({ model: 'm1' })) === 'm1@--model');
+  check('6B explicit fallback wins over default', ids(modelsToValidate({ model: 'm1', fallbackModel: 'f1', autoFallback: true })) === 'm1@--model,f1@--fallback-model');
+  check('6B auto default', ids(modelsToValidate({ autoFallback: true })) === `${DEFAULT_AGY_FALLBACK_MODEL}@--auto-fallback default`);
+  check('6B no default without auto', ids(modelsToValidate({ model: 'm1' })) === 'm1@--model');
+  check('6B dedupe case-insensitive', ids(modelsToValidate({ model: 'foo', fallbackModel: 'FOO' })) === 'foo@--model');
+  check('6B empty model not candidate', modelsToValidate({ model: '' }).length === 0);
+
+  // 6C: findInvalidModels (D2, F3)
+  const invalid = findInvalidModels([{ id: 'GEMINI-3.8-FLASH-LOW', source: '--model' }, { id: 'bogus-xyz', source: '--fallback-model' }], parsed);
+  check('6C case-insensitive + source kept', invalid.length === 1 && invalid[0].id === 'bogus-xyz' && invalid[0].source === '--fallback-model');
+
+  // 6D: single source of truth for the default fallback (C3)
+  const fb = decideFallback({ reviewer: 'antigravity', status: 1, output: 'rate_limit_exceeded', autoFallback: true });
+  check('6D decideFallback uses constant', fb.shouldFallback && fb.nextModel === DEFAULT_AGY_FALLBACK_MODEL);
+
+  // 6E: rawOutputFileName (D4)
+  check('6E response name', rawOutputFileName('2026-09-25T14:03:12.345Z', 'response') === '2026-09-25T14-03-12-345Z-response.txt');
+  check('6E prior name', rawOutputFileName('2026-09-25T14:03:12.345Z', 'prior-attempt') === '2026-09-25T14-03-12-345Z-prior-attempt.txt');
+
+  // 6F: formatLogPath (D3, T2, F6, R2-1)
+  check('6F win32 relative', formatLogPath('C:\\repo\\raw\\f.txt', 'C:\\repo', win32) === 'raw/f.txt');
+  check('6F win32 other drive', formatLogPath('D:\\logs\\f.txt', 'C:\\repo', win32) === 'D:/logs/f.txt');
+  check('6F win32 escapes cwd', formatLogPath('C:\\other\\f.txt', 'C:\\repo', win32) === 'C:/other/f.txt');
+  check('6F win32 ..foo stays relative', formatLogPath('C:\\repo\\..foo\\f.txt', 'C:\\repo', win32) === '..foo/f.txt');
+  check('6F posix escapes cwd', formatLogPath('/other/f.txt', '/repo', posix) === '/other/f.txt');
+  check('6F posix relative', formatLogPath('/repo/raw/f.txt', '/repo', posix) === 'raw/f.txt');
+
+  const tmp = mkdtempSync(join(os.tmpdir(), 'cg-b6-'));
+  try {
+    // 6G: writeRawOutput (D4 wx, fallback signal)
+    const w1 = writeRawOutput(join(tmp, 'rawdir', 'nested'), 'a.txt', 'héllo\n');
+    check('6G write + mkdir', w1 !== null && readFileSync(w1, 'utf-8') === 'héllo\n');
+    check('6G wx never overwrites', writeRawOutput(join(tmp, 'rawdir', 'nested'), 'a.txt', 'other') === null && readFileSync(w1, 'utf-8') === 'héllo\n');
+    writeFileSync(join(tmp, 'blocker.txt'), 'x');
+    check('6G dir is a file', writeRawOutput(join(tmp, 'blocker.txt'), 'b.txt', 'x') === null);
+
+    // 6H: fetchAgyModels (D1 degradation, T1, F1)
+    const okScript = `process.stdout.write(${JSON.stringify(AGY_MODELS_SAMPLE)})`;
+    const fetched = await fetchAgyModels({ bin: process.execPath, args: ['-e', okScript], timeout: 5000 });
+    check('6H fetch ok', Array.isArray(fetched) && fetched.length === 14);
+    check('6H exit 1 -> null', await fetchAgyModels({ bin: process.execPath, args: ['-e', 'process.exit(1)'], timeout: 5000 }) === null);
+    check('6H unparseable -> null', await fetchAgyModels({ bin: process.execPath, args: ['-e', 'process.stdout.write("garbage")'], timeout: 5000 }) === null);
+    check('6H ENOENT -> null', await fetchAgyModels({ bin: join(tmp, 'does-not-exist-agy'), args: ['models'], timeout: 5000 }) === null);
+    check('6H empty bin -> null', await fetchAgyModels({ bin: '', timeout: 5000 }) === null);
+    const tStart = performance.now();
+    const slow = await fetchAgyModels({ bin: process.execPath, args: ['-e', 'setTimeout(() => {}, 8000)'], timeout: 500 });
+    check('6H timeout -> null, bounded', slow === null && (performance.now() - tStart) <= 3500);
+
+    // 6I: parseArgs contracts (D4 flag validation, F2)
+    const runnerPath = join(ROOT, 'scripts', 'runner.mjs');
+    const runCli = (cliArgs) => spawnSync(process.execPath, [runnerPath, ...cliArgs], { encoding: 'utf-8', windowsHide: true });
+    // Must fail on the flag itself, not later on a missing PLAN.md.
+    const rejectsRawDir = (r) => r.status === 1 && /Flag '--raw-output-dir' requires/.test(r.stderr);
+    check('6I raw-output-dir missing', rejectsRawDir(runCli(['review', '--raw-output-dir'])));
+    check('6I raw-output-dir=', rejectsRawDir(runCli(['review', '--raw-output-dir='])));
+    check('6I raw-output-dir blank', rejectsRawDir(runCli(['review', '--raw-output-dir', '  '])));
+    const parsedOpts = parseArgs(['review', '--validate-models', '--raw-output-dir', 'my raw']);
+    check('6I options parsed', parsedOpts.validateModels === true && parsedOpts.rawOutputDir === 'my raw');
+    const defaultOpts = parseArgs(['review']);
+    check('6I defaults off', defaultOpts.validateModels === false && defaultOpts.rawOutputDir === null);
+
+    // 6J: runReview integration with a fake agy (E1-E4)
+    const work = join(tmp, 'work');
+    mkdirSync(work);
+    writeFileSync(join(work, 'PLAN.md'), '# Test Plan\n\n## 1. Scope\nClean plan for integration tests.\n', 'utf-8');
+    const fakeAgy = createFakeAgy(join(tmp, 'fakebin'));
+    const marker = join(tmp, 'marker.txt');
+    const runReviewCli = (cliArgs, extraEnv = {}) => {
+      rmSync(marker, { force: true });
+      rmSync(join(work, 'PLAN-REVIEW-LOG.md'), { force: true });
+      const res = spawnSync(process.execPath, [runnerPath, 'review', '--host', 'claude', '--timeout', '60000', ...cliArgs], {
+        cwd: work,
+        encoding: 'utf-8',
+        windowsHide: true,
+        env: { ...process.env, AGY_BIN_PATH: fakeAgy, FAKE_AGY_MARKER: marker, ...extraEnv },
+      });
+      const log = existsSync(join(work, 'PLAN-REVIEW-LOG.md')) ? readFileSync(join(work, 'PLAN-REVIEW-LOG.md'), 'utf-8') : '';
+      const invoked = existsSync(marker) ? readFileSync(marker, 'utf-8') : '';
+      return { ...res, log, invoked };
+    };
+    const body = (model) => `FAKE-REVIEW-BODY ${model}\nVERDICT: REVISE\n\nFAKE-STDERR-MARKER\n\n`;
+    const headerRe = /^\n--- \[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)\] Review Round \(Host: claude, Reviewer: antigravity, Model: ([^)]+\)?)\) ---\n/;
+
+    // Default: v1.2.0 log format, byte for byte (E3)
+    const rDefault = runReviewCli([]);
+    const mDefault = rDefault.log.match(headerRe);
+    check('6J default exit 2', rDefault.status === 2);
+    check('6J default log v1.2.0 format', !!mDefault && rDefault.log.slice(mDefault[0].length) === body('default'));
+
+    // Raw output dir: pointer + exact bytes (D3/D4)
+    const rRaw = runReviewCli(['--raw-output-dir', 'raw']);
+    const mRaw = rRaw.log.match(headerRe);
+    const rawName = mRaw ? rawOutputFileName(mRaw[1], 'response') : '';
+    check('6J raw exit 2', rRaw.status === 2);
+    check('6J raw pointer only', !!mRaw && rRaw.log.slice(mRaw[0].length) === `Raw output: raw/${rawName}\n`);
+    check('6J raw file exact bytes', !!mRaw && existsSync(join(work, 'raw', rawName)) && readFileSync(join(work, 'raw', rawName), 'utf-8') === body('default'));
+
+    // Raw output dir is a file: inline fallback + warning (E4)
+    writeFileSync(join(work, 'not-a-dir'), 'x');
+    const rBlocked = runReviewCli(['--raw-output-dir', 'not-a-dir']);
+    const mBlocked = rBlocked.log.match(headerRe);
+    check('6J blocked falls back inline', !!mBlocked && rBlocked.log.slice(mBlocked[0].length) === body('default'));
+    check('6J blocked warns', /Could not write raw/i.test(rBlocked.stderr + rBlocked.stdout));
+
+    // Fallback round: both delimiters kept, two pointers (F5)
+    const rFb = runReviewCli(['--auto-fallback', '--model', 'gemini-3.1-pro-high', '--raw-output-dir', 'raw2'], { FAKE_AGY_FAIL_MODEL: 'gemini-3.1-pro-high' });
+    const mFb = rFb.log.match(headerRe);
+    const fbExpected = mFb
+      ? `--- Prior Failed Attempt ---\nRaw output (prior failed attempt): raw2/${rawOutputFileName(mFb[1], 'prior-attempt')}\n--- Fallback Response ---\nRaw output: raw2/${rawOutputFileName(mFb[1], 'response')}\n`
+      : null;
+    check('6J fallback pointers', !!mFb && rFb.log.slice(mFb[0].length) === fbExpected);
+    const priorFile = mFb ? join(work, 'raw2', rawOutputFileName(mFb[1], 'prior-attempt')) : '';
+    check('6J fallback prior file', !!mFb && existsSync(priorFile) && /rate_limit_exceeded/.test(readFileSync(priorFile, 'utf-8')));
+
+    // Invalid fallback model: exit 1 before invoking the reviewer (E1, D2)
+    const rInvalid = runReviewCli(['--validate-models', '--fallback-model', 'bogus-xyz']);
+    check('6J invalid -> exit 1', rInvalid.status === 1);
+    check('6J invalid -> reviewer not invoked', rInvalid.invoked === '');
+    check('6J invalid -> names model and source', /bogus-xyz/.test(rInvalid.stderr) && /--fallback-model/.test(rInvalid.stderr));
+
+    // Valid default fallback proceeds
+    const rDefaultFb = runReviewCli(['--validate-models', '--auto-fallback']);
+    check('6J valid default fallback proceeds', rDefaultFb.status === 2 && rDefaultFb.invoked === 'invoked:default\n');
+
+    // Valid model in other case proceeds (F3)
+    const rValid = runReviewCli(['--validate-models', '--model', 'GEMINI-3.8-FLASH-LOW']);
+    check('6J valid mixed case proceeds', rValid.status === 2 && rValid.invoked.includes('invoked:GEMINI-3.8-FLASH-LOW'));
+
+    // Offline catalog: warning and proceed (E2)
+    const rOffline = runReviewCli(['--validate-models', '--fallback-model', 'bogus-xyz'], { FAKE_AGY_MODELS_FAIL: '1' });
+    check('6J offline proceeds', rOffline.status === 2 && /Unable to fetch models/.test(rOffline.stderr + rOffline.stdout));
+
+    // Host antigravity: warning, no validation
+    const rHostAg = spawnSync(process.execPath, [runnerPath, 'review', '--host', 'antigravity', '--validate-models', '--model', 'bogus-xyz', '--timeout', '1000'], {
+      cwd: work, encoding: 'utf-8', windowsHide: true,
+      env: { ...process.env, CLAUDE_BIN_PATH: fakeAgy },
+    });
+    check('6J host antigravity warns and proceeds', /only supported when Antigravity is the reviewer/.test(rHostAg.stderr + rHostAg.stdout) && rHostAg.status === 2);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+
+  const passed = failures.length === 0;
+  recordResult({
+    name: 'Model Validation & Raw Output Separation (fetchAgyModels, writeRawOutput)',
+    category: 'RELIABILITY',
+    passed,
+    metric: passed ? 'All D1-D4 checks passed' : `Failed: ${failures.join(' | ')}`,
+    baseline: 'Invalid fallback model discovered up to 600 s late; raw reviewer output mixed into PLAN-REVIEW-LOG.md',
+    target: 'Opt-in pre-validation with exit 1 and offline degradation; pointers + exact raw files with zero evidence loss',
+    details: 'Verified parsing, candidate set, case-insensitive matching, default-fallback constant, file naming, path formatting (win32/posix), wx writes, fetch degradation, CLI contracts and end-to-end runReview with a fake agy shim.',
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Main Runner & Markdown Report Generation
 // ---------------------------------------------------------------------------
 async function main() {
@@ -859,6 +1091,7 @@ async function main() {
   await runBenchmark3();
   await runBenchmark4();
   await runBenchmark5();
+  await runBenchmark6();
   const totalDuration = ((performance.now() - suiteStart) / 1000).toFixed(2);
 
   console.log('\n===============================================================');
@@ -876,7 +1109,7 @@ async function main() {
     '',
     `**Fecha de Ejecución**: ${new Date().toISOString()}  `,
     `**Plataforma**: ${process.platform} (${process.arch}) | Node.js ${process.version}  `,
-    `**Resultado Global**: ${allPassed ? '🎉 100% APROBADO (5/5 Tests Pasados)' : '⚠️ DEFECTOS ENCONTRADOS'}  `,
+    `**Resultado Global**: ${allPassed ? `🎉 100% APROBADO (${passedCount}/${totalCount} Tests Pasados)` : '⚠️ DEFECTOS ENCONTRADOS'}  `,
     `**Tiempo Total**: ${totalDuration} segundos  `,
     '',
     '## Tabla de Resultados Cuantitativos',

@@ -4,6 +4,23 @@ All notable changes to `claudegravity-loop` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - Unreleased
+
+### Added
+- **Model validation (`review --validate-models`)**: opt-in check of `--model`, `--fallback-model` and, with `--auto-fallback`, the default fallback model against `agy models` before the round starts. Matching ignores case (as `agy` does). An unknown model exits with code `1` (CONFIG / ARGS ERROR) before the reviewer is invoked, instead of surfacing up to 600 s later when the fallback runs. `agy models` runs with a 10 s timeout under the same child environment as the round; if it fails, times out or prints nothing parseable, the runner warns and continues (offline / air-gapped safe). With `--host antigravity` (Claude reviews) there is no catalog, so it only warns.
+- **Raw output separation (`review --raw-output-dir <dir>`)**: the reviewer's raw output is written to `<dir>/<ISO-timestamp>-response.txt` (and `-prior-attempt.txt` after a fallback) with exclusive creation (`wx`, never overwritten). `PLAN-REVIEW-LOG.md` keeps the round header, the `--skip-lint` section and the fallback delimiters, with `Raw output: <path>` pointers (relative to the working directory, `/` separators) instead of the bodies. If a file cannot be written, that body is logged inline with a warning: no evidence is lost. Empty or blank values exit with code `1`.
+- **Benchmark 6** covering both features, including an end-to-end `runReview` run against a fake `agy` shim.
+
+### Changed
+- `DEFAULT_AGY_FALLBACK_MODEL` is now a single exported constant shared by `decideFallback` and model validation.
+- The benchmark report computes its pass count instead of hardcoding it.
+- README: Antigravity installation now uses `git archive` of the tag and `agy plugin import --force`.
+
+### Unchanged
+- Without the new flags, stdout, exit codes and the `PLAN-REVIEW-LOG.md` format are identical to 1.2.0. An invalid model without `--validate-models` still exits with code `5`.
+
+---
+
 ## [1.2.0] - 2026-09-18
 
 ### Added
