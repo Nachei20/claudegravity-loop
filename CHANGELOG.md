@@ -4,7 +4,7 @@ All notable changes to `claudegravity-loop` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.3.0] - Unreleased
+## [1.3.0] - 2026-09-26
 
 ### Added
 - **Model validation (`review --validate-models`)**: opt-in check of `--model`, `--fallback-model` and, with `--auto-fallback`, the default fallback model against `agy models` before the round starts. Matching ignores case (as `agy` does). An unknown model exits with code `1` (CONFIG / ARGS ERROR) before the reviewer is invoked, instead of surfacing up to 600 s later when the fallback runs. `agy models` runs with a 10 s timeout under the same child environment as the round; if it fails, times out or prints nothing parseable, the runner warns and continues (offline / air-gapped safe). With `--host antigravity` (Claude reviews) there is no catalog, so it only warns.
