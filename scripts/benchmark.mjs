@@ -893,6 +893,7 @@ process.exit(0);
 `;
 
 function createFakeAgy(baseDir) {
+  mkdirSync(baseDir, { recursive: true });
   if (process.platform === 'win32') {
     const pkgDir = join(baseDir, 'node_modules', 'fake-agy');
     mkdirSync(pkgDir, { recursive: true });
