@@ -876,7 +876,7 @@ async function main() {
     '',
     `**Fecha de Ejecución**: ${new Date().toISOString()}  `,
     `**Plataforma**: ${process.platform} (${process.arch}) | Node.js ${process.version}  `,
-    `**Resultado Global**: ${allPassed ? '🎉 100% APROBADO (5/5 Tests Pasados)' : '⚠️ DEFECTOS ENCONTRADOS'}  `,
+    `**Resultado Global**: ${allPassed ? `🎉 100% APROBADO (${passedCount}/${totalCount} Tests Pasados)` : '⚠️ DEFECTOS ENCONTRADOS'}  `,
     `**Tiempo Total**: ${totalDuration} segundos  `,
     '',
     '## Tabla de Resultados Cuantitativos',

@@ -24,6 +24,8 @@ try {
   PKG_VERSION = 'unknown';
 }
 
+export const DEFAULT_AGY_FALLBACK_MODEL = 'gemini-3.7-flash-medium';
+
 export const FALLBACK_SIGNALS = [
   /policy\s*(?:violation|block|filter)/i,
   /\[bio\]/i,
@@ -386,7 +388,7 @@ export function decideFallback({ currentModel, reviewer, status, output, autoFal
       }
     } else if (reviewer === 'antigravity') {
       if (!currentModel || currentModel.includes('pro') || currentModel.includes('thinking')) {
-        return { shouldFallback: true, nextModel: 'gemini-3.7-flash-medium' };
+        return { shouldFallback: true, nextModel: DEFAULT_AGY_FALLBACK_MODEL };
       }
     }
   }
