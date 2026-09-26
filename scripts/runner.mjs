@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 
 /**
- * Claudegravity Loop Runner — Hardened v1.2.0
+ * Claudegravity Loop Runner — Hardened v1.3.0
  * Standard-library zero-dependency CLI adapter for automating cross-model review rounds.
  * Node.js 18+ (Windows, macOS, Linux).
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, realpathSync, mkdirSync } from 'node:fs';
 import path, { dirname, resolve, join, basename, extname, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
@@ -16,10 +16,10 @@ import process from 'node:process';
 const __dirname = import.meta.dirname ?? dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
-let PKG_VERSION = '1.2.0';
+let PKG_VERSION = '1.3.0';
 try {
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'));
-  PKG_VERSION = pkg.version || '1.2.0';
+  PKG_VERSION = pkg.version || '1.3.0';
 } catch {
   PKG_VERSION = 'unknown';
 }
@@ -208,6 +208,8 @@ export function parseArgs(args) {
     timeout: 600000,
     stdin: true,
     skipLint: false,
+    validateModels: false,
+    rawOutputDir: null,
   };
 
   let hasHelp = false;
@@ -305,6 +307,22 @@ export function parseArgs(args) {
       }
       const t = parseInt(args[++i], 10);
       options.timeout = isNaN(t) ? 600000 : t;
+    }
+    else if (arg === '--validate-models') options.validateModels = true;
+    else if (arg === '--raw-output-dir' || arg.startsWith('--raw-output-dir=')) {
+      const inline = arg.startsWith('--raw-output-dir=');
+      if (!inline && (i + 1 >= args.length || args[i + 1].startsWith('-'))) {
+        console.error(`❌ Error: Flag '--raw-output-dir' requires a directory path argument.`);
+        printUsage();
+        process.exit(1);
+      }
+      const dir = inline ? arg.slice(17) : args[++i];
+      if (!dir.trim()) {
+        console.error(`❌ Error: Flag '--raw-output-dir' requires a non-empty directory path.`);
+        printUsage();
+        process.exit(1);
+      }
+      options.rawOutputDir = dir;
     }
     else if (arg === '--no-stdin') options.stdin = false;
     else if (arg === '--skip-lint') options.skipLint = true;
@@ -860,6 +878,114 @@ export async function executeReviewerAsync({ bin, args = [], prompt, env = proce
   });
 }
 
+export const MODELS_FETCH_TIMEOUT_MS = 10000;
+const AUTO_FALLBACK_SOURCE = '--auto-fallback default';
+
+// `agy models` prints one `id<TAB>name` line per model on stdout (the spinner goes to stderr).
+export function parseAgyModels(stdout) {
+  if (typeof stdout !== 'string') return [];
+  const ids = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    const tab = line.indexOf('\t');
+    if (tab === -1) continue;
+    const id = line.slice(0, tab).trim();
+    if (/^[A-Za-z0-9._-]+$/.test(id)) ids.push(id);
+  }
+  return ids;
+}
+
+// Models a review round may use, in order. An empty value means "CLI default", as in buildArgs.
+export function modelsToValidate({ model, fallbackModel, autoFallback } = {}) {
+  const candidates = [];
+  const seen = new Set();
+  const add = (id, source) => {
+    if (typeof id !== 'string' || !id) return;
+    const key = id.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push({ id, source });
+  };
+  add(model, '--model');
+  if (fallbackModel) add(fallbackModel, '--fallback-model');
+  else if (autoFallback) add(DEFAULT_AGY_FALLBACK_MODEL, AUTO_FALLBACK_SOURCE);
+  return candidates;
+}
+
+// agy accepts model ids in any case, so the comparison ignores case.
+export function findInvalidModels(candidates, available) {
+  const known = new Set((available || []).map((id) => id.toLowerCase()));
+  return candidates.filter((c) => !known.has(c.id.toLowerCase()));
+}
+
+export function rawOutputFileName(isoTimestamp, kind) {
+  return `${isoTimestamp.replace(/[:.]/g, '-')}-${kind}.txt`;
+}
+
+// Relative to cwd with '/', or absolute with '/' when the file is outside cwd or on another drive.
+export function formatLogPath(absPath, cwd = process.cwd(), pathImpl = path) {
+  const rel = pathImpl.relative(cwd, absPath);
+  const outside = pathImpl.isAbsolute(rel) || rel.split(/[\\/]/)[0] === '..';
+  return (outside ? absPath : rel).replace(/\\/g, '/');
+}
+
+// Returns the model ids, or null when the catalog is unavailable (the caller degrades to a warning).
+export async function fetchAgyModels({ bin, args = ['models'], env = process.env, timeout = MODELS_FETCH_TIMEOUT_MS } = {}) {
+  if (typeof bin !== 'string' || !bin.trim()) return null;
+  let res;
+  try {
+    res = await executeReviewerAsync({ bin, args, prompt: '', env, stdin: false, timeout });
+  } catch {
+    return null;
+  }
+  if (res.status !== 0 || res.timedOut) return null;
+  const ids = parseAgyModels(res.stdout || '');
+  return ids.length > 0 ? ids : null;
+}
+
+// Exclusive create ('wx'): never overwrites. Returns the absolute path, or null so the caller inlines the content.
+export function writeRawOutput(dir, fileName, content) {
+  try {
+    const targetDir = resolve(process.cwd(), dir);
+    mkdirSync(targetDir, { recursive: true });
+    const targetPath = join(targetDir, fileName);
+    writeFileSync(targetPath, content, { flag: 'wx', encoding: 'utf-8' });
+    return targetPath;
+  } catch {
+    return null;
+  }
+}
+
+async function validateModelsOrExit({ options, reviewer, reviewerBin, env }) {
+  if (reviewer !== 'antigravity') {
+    console.warn('⚠️ Warning: Model validation is only supported when Antigravity is the reviewer (--host claude). Proceeding.');
+    return;
+  }
+  const candidates = modelsToValidate(options);
+  if (candidates.length === 0) {
+    console.log('ℹ️ --validate-models: no models to validate. Skipping.');
+    return;
+  }
+  console.log(`🔎 Validating model(s) against 'agy models': ${candidates.map((c) => c.id).join(', ')}`);
+  const available = await fetchAgyModels({ bin: reviewerBin, env });
+  if (!available) {
+    console.warn("⚠️ Warning: Unable to fetch models from 'agy models' (offline or timed out). Proceeding without validation.");
+    return;
+  }
+  const invalid = findInvalidModels(candidates, available);
+  if (invalid.length === 0) {
+    console.log('✅ Models validated.');
+    return;
+  }
+  for (const { id, source } of invalid) {
+    console.error(`❌ Error: Model '${id}' (from ${source}) is not listed by 'agy models'.`);
+  }
+  if (invalid.some((c) => c.source === AUTO_FALLBACK_SOURCE)) {
+    console.error('   Pass --fallback-model <id> to override the default fallback model.');
+  }
+  console.error(`   Available models: ${available.join(', ')}`);
+  process.exit(1);
+}
+
 export function printUsage() {
   console.log(`
 🌀 Claudegravity Loop Runner v${PKG_VERSION}
@@ -881,6 +1007,8 @@ Options:
   --timeout <ms>           Execution timeout per round in ms (default: 600000)
   --no-stdin               Pass prompt as argv instead of streaming via stdin pipe
   --skip-lint              Proceed with review even if pre-flight linter detects inconsistencies
+  --validate-models        Check --model/--fallback-model against 'agy models' before the round (exit 1 if invalid)
+  --raw-output-dir <dir>   Write raw reviewer output to files in <dir>; the log keeps pointers
   --help, -h               Show this usage guide
   --version, -v            Show runner version
 `);
@@ -982,6 +1110,10 @@ export async function runReview(options) {
   // Step 3: Configure Child Environment via buildChildEnv
   const childEnv = buildChildEnv(options);
 
+  if (options.validateModels) {
+    await validateModelsOrExit({ options, reviewer, reviewerBin, env: childEnv });
+  }
+
   // Adversarial prompt with Anti-Sycophancy & Pressure Framing
   const prompt = `You are an adversarial reviewer for an implementation plan under the Claudegravity Loop protocol.
 You act as a Lead Architect & Security Auditor operating under production incident pressure.
@@ -1077,14 +1209,23 @@ ${planContent}
   // Step 5: Execution Log recording
   if (options.log) {
     const logPath = resolve(process.cwd(), options.log);
-    let logEntry = `\n--- [${new Date().toISOString()}] Review Round (Host: ${options.host}, Reviewer: ${reviewer}, Model: ${usedModel}) ---\n`;
+    const roundIso = new Date().toISOString();
+    let logEntry = `\n--- [${roundIso}] Review Round (Host: ${options.host}, Reviewer: ${reviewer}, Model: ${usedModel}) ---\n`;
     if (options.skipLint && !lintResult.ok) {
       logEntry += `--- Pre-flight Linter Bypassed via --skip-lint ---\nSuppressed Errors:\n${lintResult.errors.map((e) => `  - ${e}`).join('\n')}\n\n`;
     }
+    // With --raw-output-dir each body becomes a pointer, or stays inline if its file cannot be written.
+    const body = (kind, label, content) => {
+      if (!options.rawOutputDir) return content;
+      const written = writeRawOutput(options.rawOutputDir, rawOutputFileName(roundIso, kind), content);
+      if (written) return `${label}: ${formatLogPath(written)}\n`;
+      console.warn(`⚠️ Warning: Could not write raw ${kind} output to '${options.rawOutputDir}'. Writing it inline in ${options.log}.`);
+      return content;
+    };
     if (priorAttemptOutput) {
-      logEntry += `--- Prior Failed Attempt ---\n${priorAttemptOutput}\n--- Fallback Response ---\n`;
+      logEntry += `--- Prior Failed Attempt ---\n${body('prior-attempt', 'Raw output (prior failed attempt)', `${priorAttemptOutput}\n`)}--- Fallback Response ---\n`;
     }
-    logEntry += `${res.stdout || ''}\n${res.stderr || ''}\n`;
+    logEntry += body('response', 'Raw output', `${res.stdout || ''}\n${res.stderr || ''}\n`);
     try {
       writeFileSync(logPath, logEntry, { flag: 'a', encoding: 'utf-8' });
     } catch (e) {

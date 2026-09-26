@@ -92,7 +92,7 @@ flowchart TD
 
 ---
 
-## CLI Runner (`claudegravity` v1.2.0)
+## CLI Runner (`claudegravity` v1.3.0)
 
 Claudegravity Loop includes a zero-dependency native JavaScript CLI adapter to automate review rounds, preflight diagnostics, and empirical benchmarks:
 
@@ -112,15 +112,22 @@ node scripts/runner.mjs review --plan PLAN.md --auto-fallback
 #   --track <type>           Phase 3 track: 'code' (worktrees) or 'artifact' (render/extract)
 #   --timeout <ms>           Round timeout with clean process tree kill (default: 600000)
 #   --skip-lint              Proceed with review even if pre-flight linter detects inconsistencies
+#   --validate-models        Check --model/--fallback-model against 'agy models' before the round
+#   --raw-output-dir <dir>   Write raw reviewer output to files in <dir>; the log keeps pointers
 #   --help, -h               Show usage guide
 #   --version, -v            Show runner version
 
-# Run the empirical benchmark suite (5/5 passing benchmarks)
+# Run the empirical benchmark suite (6/6 passing benchmarks)
 npm run benchmark
 ```
 
 > [!TIP]
 > **Preflight Linter Escape Hatch (`--skip-lint`)**: The preflight linter automatically scopes the `-` operator to recognised budget units (`cm`, `mm`, `px`, `pt`, `%`) and distinguishes ranges (`Columns 3-4`, `Márgenes 1-2cm`) and ISO dates (`2026-09-14`). For complex subtraction equations with intermediate textual labels (e.g., `Layout: col A: 20cm - col B: 5cm = 15cm`), use `--skip-lint` to bypass equation checking while preserving full plan review capabilities.
+
+> [!NOTE]
+> **Model validation (`--validate-models`)**: with `--host claude` (Antigravity reviews), the runner runs `agy models` (10 s timeout) and checks `--model`, `--fallback-model` and, with `--auto-fallback`, the default fallback model, ignoring case. An unknown model exits with code `1` before the reviewer starts. If the catalog cannot be fetched (offline, air-gapped, timeout), it prints a warning and the round continues. With `--host antigravity` there is no catalog to check against, so it only warns.
+>
+> **Raw output (`--raw-output-dir <dir>`)**: each round writes the reviewer's raw stdout/stderr to `<dir>/<timestamp>-response.txt` (and `<timestamp>-prior-attempt.txt` after a fallback), created exclusively (never overwritten). `PLAN-REVIEW-LOG.md` keeps the round header and a `Raw output: <path>` pointer instead of the body. If a file cannot be written, that body is logged inline as usual. Without the flag the log format is unchanged.
 
 ---
 
@@ -138,7 +145,7 @@ Empirically validates the performance, stability, and security gains:
 
 ### Runner Exit Codes
 * `0`: **APPROVED** — Plan passed cross-model review with `VERDICT: APPROVED`.
-* `1`: **CONFIG / ARGS ERROR** — Invalid arguments, unknown flags, missing CLI, or missing plan file.
+* `1`: **CONFIG / ARGS ERROR** — Invalid arguments, unknown flags, missing CLI, missing plan file, or (with `--validate-models`) a model not listed by `agy models`.
 * `2`: **REVISE** — Reviewer identified architectural findings with `VERDICT: REVISE`. Arbitrate in `PLAN-REVIEW-LOG.md`.
 * `4`: **LINTER ERROR** — Preflight code-fence balance, unit budget, or arithmetic inconsistency in `PLAN.md`.
 * `5`: **BRIDGE ERROR** — Reviewer invocation failure, execution error, or missing verdict tag (never confused with REVISE).
@@ -164,14 +171,16 @@ To update an existing installation:
 ```
 
 ### Method B: Install as a Google Antigravity Plugin (`agy` 1.2+)
-The supported installation method for Antigravity is importing a clean checkout of the release tag:
+The supported installation method for Antigravity is importing a clean export of the release tag:
 ```bash
-agy plugin import <path-to-clean-checkout-of-tag>
+git archive v1.3.0 | tar -x -C <empty-dir>
+agy plugin import --force <empty-dir>
 ```
+`--force` is required to update an existing import: without it `agy` prints `[skip]` and keeps the registry entry of the old version.
 This automatically registers the 4 skills and bundles `scripts/runner.mjs` directly into `~/.gemini/config/plugins/claudegravity-loop/`.
 
 > [!WARNING]
-> * **Clean checkout required**: Always run `agy plugin import` against a clean checkout of the tag (e.g. `git checkout v1.2.0`). Importing from an active working tree copies `.git`, `PLAN.md`, audit logs, and temporary files into the global plugin cache.
+> * **Clean export required**: Always import a `git archive` of the tag. Importing from a working tree or a `git worktree` copies `.git`, `PLAN.md`, audit logs, and temporary files into the global plugin cache.
 > * **`agy plugin install` not supported**: `agy plugin install` rejects this repository (it expects an agy-format plugin.json in the repository root). Use `agy plugin import <path>` instead.
 > * **No symlinks / junctions**: Antigravity does not traverse filesystem junctions or symbolic links when discovering plugins or skills.
 
