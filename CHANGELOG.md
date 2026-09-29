@@ -4,6 +4,24 @@ All notable changes to `claudegravity-loop` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-09-28
+
+### Changed
+- **Flag values are validated at parse time** (exit `1`, before anything runs, keeping the 1.2.0 rule that flag errors win over `--help`):
+  - `--plan` with an empty or blank value. Before, `--plan=` crashed the runner with `EISDIR`.
+  - `--host` with an empty or unknown value. Before, a typo such as `--host antigravit` silently became `claude`, which swaps the roles of planner and reviewer.
+  - `--track` with an empty or unknown value. Before, it silently became `auto`.
+  - `--timeout` unless it is a positive integer. Before, an empty or non-numeric value silently became 600000 ms, `10abc` became 10 ms, and `0` disabled the timeout.
+- **A model the reviewer rejects as unknown now exits with `1` (CONFIG / ARGS ERROR) instead of `5`**, with a message naming the model. It is detected by the verified signatures of `agy` (`invalid model selection`) and Claude Code (`[claude-code:unrecognized_model]`), and only when the reviewer exited with a non-zero status, so a review that quotes those words is not misread. Output that matches neither signature still exits with `5`. An unknown model never triggers the fallback, with or without `--auto-fallback`.
+
+### Documented
+- Empty values that keep working on purpose: `--log=` disables `PLAN-REVIEW-LOG.md`, and `--model=` / `--fallback-model=` use the reviewer CLI's default model.
+
+### Added
+- **Benchmark 7** covering the flag contracts and the invalid-model classification, end to end with the fake `agy` shim.
+
+---
+
 ## [1.3.0] - 2026-09-26
 
 ### Added

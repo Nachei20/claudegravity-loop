@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Claudegravity Loop Benchmark Suite — Hardened v1.3.0
+ * Claudegravity Loop Benchmark Suite — Hardened v1.4.0
  * Empirically validates the performance, stability, and security gains of Claudegravity Loop.
  * Directly exercises and validates real functions from runner.mjs against mutation testing (M1-M12).
  * Standard library zero-dependency execution.
@@ -39,15 +39,16 @@ import {
   formatLogPath,
   fetchAgyModels,
   writeRawOutput,
+  isInvalidModelError,
 } from './runner.mjs';
 
 const __dirname = import.meta.dirname ?? dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
-let PKG_VERSION = '1.3.0';
+let PKG_VERSION = '1.4.0';
 try {
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'));
-  PKG_VERSION = pkg.version || '1.3.0';
+  PKG_VERSION = pkg.version || '1.4.0';
 } catch {
   PKG_VERSION = 'unknown';
 }
@@ -887,7 +888,13 @@ const mIdx = args.indexOf('--model');
 const model = mIdx !== -1 ? args[mIdx + 1] : 'default';
 if (process.env.FAKE_AGY_MARKER) fs.appendFileSync(process.env.FAKE_AGY_MARKER, 'invoked:' + model + '\\n');
 if (model === process.env.FAKE_AGY_FAIL_MODEL) { process.stderr.write('rate_limit_exceeded\\n'); process.exit(1); }
-process.stdout.write('FAKE-REVIEW-BODY ' + model + '\\nVERDICT: REVISE\\n');
+if (model === process.env.FAKE_AGY_INVALID_MODEL) {
+  process.stderr.write('error: invalid model selection (--model "' + model + '" --effort ""): model ' + model + ' is not recognized as a known model or custom model in settings\\nAvailable models:\\n  Gemini 3.8 Flash (High)\\n');
+  process.exit(1);
+}
+if (process.env.FAKE_AGY_GENERIC_FAIL === '1') { process.stderr.write('boom: unexpected bridge failure\\n'); process.exit(1); }
+if (process.env.FAKE_AGY_QUOTE === '1') process.stdout.write('Finding: the runner should map "invalid model selection" to exit 1.\\n');
+process.stdout.write('FAKE-REVIEW-BODY ' + model + '\\n' + (process.env.FAKE_AGY_NO_VERDICT === '1' ? '' : 'VERDICT: REVISE\\n'));
 process.stderr.write('FAKE-STDERR-MARKER\\n');
 process.exit(0);
 `;
@@ -1078,6 +1085,99 @@ async function runBenchmark6() {
 }
 
 // ---------------------------------------------------------------------------
+// Benchmark 7: CLI Value Contracts & Invalid Model Classification (v1.4.0, Q1-Q2)
+// ---------------------------------------------------------------------------
+async function runBenchmark7() {
+  console.log('\n📊 Running Benchmark 7: CLI Value Contracts & Invalid Model Classification (v1.4.0)...');
+  const failures = [];
+  const check = (label, ok) => { if (!ok) failures.push(label); return ok; };
+  const runnerPath = join(ROOT, 'scripts', 'runner.mjs');
+  const runCli = (cliArgs) => spawnSync(process.execPath, [runnerPath, ...cliArgs], { encoding: 'utf-8', windowsHide: true });
+
+  // 7A: empty / invalid values are rejected by the flag itself (Q1), not later by a missing PLAN.md
+  const rejects = (cliArgs, flag) => {
+    const r = runCli(['review', ...cliArgs]);
+    return r.status === 1 && r.stderr.includes(`Flag '${flag}'`) && !/EISDIR/.test(r.stderr);
+  };
+  check('7A --plan=', rejects(['--plan='], '--plan'));
+  check('7A --plan blank', rejects(['--plan', '  '], '--plan'));
+  check('7A --host=', rejects(['--host='], '--host'));
+  check('7A --host unknown', rejects(['--host', 'antigravit'], '--host'));
+  check('7A --track=', rejects(['--track='], '--track'));
+  check('7A --track unknown', rejects(['--track', 'bogus'], '--track'));
+  check('7A --timeout=', rejects(['--timeout='], '--timeout'));
+  check('7A --timeout abc', rejects(['--timeout', 'abc'], '--timeout'));
+  check('7A --timeout 10abc', rejects(['--timeout', '10abc'], '--timeout'));
+  check('7A --timeout 0', rejects(['--timeout', '0'], '--timeout'));
+  check('7A --timeout=0', rejects(['--timeout=0'], '--timeout'));
+
+  // 7B: preserved semantics (Q1)
+  const opts = parseArgs(['review', '--log=', '--model=', '--fallback-model=', '--timeout=5000', '--host=ANTIGRAVITY', '--track=artifact']);
+  check('7B --log= disables log', opts.log === '');
+  check('7B --model= keeps CLI default', opts.model === '' && opts.fallbackModel === '');
+  check('7B valid values accepted', opts.timeout === 5000 && opts.host === 'antigravity' && opts.track === 'artifact');
+  check('7B defaults unchanged', (() => { const d = parseArgs(['review']); return d.host === 'claude' && d.track === 'auto' && d.timeout === 600000 && d.plan === 'PLAN.md'; })());
+
+  // 7C: isInvalidModelError signatures (Q2)
+  check('7C agy signature', isInvalidModelError('error: invalid model selection (--model "x" --effort ""): model x is not recognized'));
+  check('7C claude signature', isInvalidModelError('[claude-code:unrecognized_model] {"model":"bogus-xyz","query_source":"sdk"}'));
+  check('7C unrelated', !isInvalidModelError('rate_limit_exceeded') && !isInvalidModelError('') && !isInvalidModelError(undefined));
+  check('7C no fallback on invalid model', decideFallback({ reviewer: 'antigravity', status: 1, output: 'error: invalid model selection', autoFallback: true, fallbackModel: 'gemini-3.8-flash-low' }).shouldFallback === false);
+
+  // 7D: runReview end to end with the fake agy
+  const tmp = mkdtempSync(join(os.tmpdir(), 'cg-b7-'));
+  try {
+    const work = join(tmp, 'work');
+    mkdirSync(work);
+    writeFileSync(join(work, 'PLAN.md'), '# Test Plan\n\n## 1. Scope\nClean plan for integration tests.\n', 'utf-8');
+    const fakeAgy = createFakeAgy(join(tmp, 'fakebin'));
+    const marker = join(tmp, 'marker.txt');
+    const run = (cliArgs, extraEnv = {}) => {
+      rmSync(marker, { force: true });
+      rmSync(join(work, 'PLAN-REVIEW-LOG.md'), { force: true });
+      const res = spawnSync(process.execPath, [runnerPath, 'review', '--host', 'claude', '--timeout', '60000', ...cliArgs], {
+        cwd: work, encoding: 'utf-8', windowsHide: true,
+        env: { ...process.env, AGY_BIN_PATH: fakeAgy, FAKE_AGY_MARKER: marker, ...extraEnv },
+      });
+      const log = existsSync(join(work, 'PLAN-REVIEW-LOG.md')) ? readFileSync(join(work, 'PLAN-REVIEW-LOG.md'), 'utf-8') : '';
+      const invoked = existsSync(marker) ? readFileSync(marker, 'utf-8') : '';
+      return { ...res, log, invoked };
+    };
+
+    const rInvalid = run(['--model', 'bogus-xyz'], { FAKE_AGY_INVALID_MODEL: 'bogus-xyz' });
+    check('7D invalid model -> exit 1', rInvalid.status === 1);
+    check('7D invalid model -> actionable message', /bogus-xyz/.test(rInvalid.stderr) && /--validate-models/.test(rInvalid.stderr));
+    check('7D invalid model -> round still logged', /invalid model selection/.test(rInvalid.log));
+
+    const rInvalidFb = run(['--model', 'bogus-xyz', '--auto-fallback', '--fallback-model', 'gemini-3.8-flash-low'], { FAKE_AGY_INVALID_MODEL: 'bogus-xyz' });
+    check('7D invalid model does not trigger fallback', rInvalidFb.status === 1 && rInvalidFb.invoked === 'invoked:bogus-xyz\n');
+
+    const rGeneric = run([], { FAKE_AGY_GENERIC_FAIL: '1' });
+    check('7D other failures stay exit 5', rGeneric.status === 5);
+
+    const rQuote = run([], { FAKE_AGY_QUOTE: '1' });
+    check('7D quoted signature with exit 0 stays REVISE', rQuote.status === 2);
+
+    // The status gate matters when the review succeeds but emits no verdict: still a bridge error, not CONFIG
+    const rQuoteNoVerdict = run([], { FAKE_AGY_QUOTE: '1', FAKE_AGY_NO_VERDICT: '1' });
+    check('7D quoted signature without verdict stays exit 5', rQuoteNoVerdict.status === 5);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+
+  const passed = failures.length === 0;
+  recordResult({
+    name: 'CLI Value Contracts & Invalid Model Classification (parseArgs, isInvalidModelError)',
+    category: 'RELIABILITY',
+    passed,
+    metric: passed ? 'All Q1-Q2 checks passed' : `Failed: ${failures.join(' | ')}`,
+    baseline: '--plan= crashing with EISDIR, typos in --host/--track/--timeout silently defaulted, invalid model reported as bridge error (exit 5)',
+    target: 'Flag values validated at parse time with exit 1; invalid model classified as CONFIG (exit 1) only on non-zero status, without fallback',
+    details: 'Verified flag rejections with explicit messages, preserved empty-value semantics (--log=, --model=, --fallback-model=), signature matching, no fallback on invalid model, and end-to-end exit codes with a fake agy shim.',
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Main Runner & Markdown Report Generation
 // ---------------------------------------------------------------------------
 async function main() {
@@ -1092,6 +1192,7 @@ async function main() {
   await runBenchmark4();
   await runBenchmark5();
   await runBenchmark6();
+  await runBenchmark7();
   const totalDuration = ((performance.now() - suiteStart) / 1000).toFixed(2);
 
   console.log('\n===============================================================');

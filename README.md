@@ -92,7 +92,7 @@ flowchart TD
 
 ---
 
-## CLI Runner (`claudegravity` v1.3.0)
+## CLI Runner (`claudegravity` v1.4.0)
 
 Claudegravity Loop includes a zero-dependency native JavaScript CLI adapter to automate review rounds, preflight diagnostics, and empirical benchmarks:
 
@@ -109,17 +109,20 @@ node scripts/runner.mjs review --plan PLAN.md --auto-fallback
 #   --auto-fallback          Automatic 1-hop fallback on CBRN/policy/rate limits
 #   --fallback-on-timeout    Allow execution timeout to trigger model fallback
 #   --insecure-tls           Opt-in TLS bypass for corporate/local proxies (Warning logged)
-#   --track <type>           Phase 3 track: 'code' (worktrees) or 'artifact' (render/extract)
-#   --timeout <ms>           Round timeout with clean process tree kill (default: 600000)
+#   --track <type>           Phase 3 track: 'code' (worktrees), 'artifact' (render/extract) or 'auto'
+#   --timeout <ms>           Round timeout, a positive integer, with clean process tree kill (default: 600000)
 #   --skip-lint              Proceed with review even if pre-flight linter detects inconsistencies
 #   --validate-models        Check --model/--fallback-model against 'agy models' before the round
 #   --raw-output-dir <dir>   Write raw reviewer output to files in <dir>; the log keeps pointers
 #   --help, -h               Show usage guide
 #   --version, -v            Show runner version
 
-# Run the empirical benchmark suite (6/6 passing benchmarks)
+# Run the empirical benchmark suite (7/7 passing benchmarks)
 npm run benchmark
 ```
+
+> [!NOTE]
+> **Flag values**: `--plan`, `--host`, `--track` and `--timeout` must have a valid value; an empty, unknown or non-positive value exits with code `1` before anything runs. Three flags accept an empty value on purpose: `--log=` disables writing `PLAN-REVIEW-LOG.md`, and `--model=` / `--fallback-model=` use the reviewer CLI's default model.
 
 > [!TIP]
 > **Preflight Linter Escape Hatch (`--skip-lint`)**: The preflight linter automatically scopes the `-` operator to recognised budget units (`cm`, `mm`, `px`, `pt`, `%`) and distinguishes ranges (`Columns 3-4`, `Márgenes 1-2cm`) and ISO dates (`2026-09-14`). For complex subtraction equations with intermediate textual labels (e.g., `Layout: col A: 20cm - col B: 5cm = 15cm`), use `--skip-lint` to bypass equation checking while preserving full plan review capabilities.
@@ -145,7 +148,7 @@ Empirically validates the performance, stability, and security gains:
 
 ### Runner Exit Codes
 * `0`: **APPROVED** — Plan passed cross-model review with `VERDICT: APPROVED`.
-* `1`: **CONFIG / ARGS ERROR** — Invalid arguments, unknown flags, missing CLI, missing plan file, or (with `--validate-models`) a model not listed by `agy models`.
+* `1`: **CONFIG / ARGS ERROR** — Invalid arguments or flag values, unknown flags, missing CLI, missing plan file, a model not listed by `agy models` (with `--validate-models`), or a model the reviewer rejected as unknown.
 * `2`: **REVISE** — Reviewer identified architectural findings with `VERDICT: REVISE`. Arbitrate in `PLAN-REVIEW-LOG.md`.
 * `4`: **LINTER ERROR** — Preflight code-fence balance, unit budget, or arithmetic inconsistency in `PLAN.md`.
 * `5`: **BRIDGE ERROR** — Reviewer invocation failure, execution error, or missing verdict tag (never confused with REVISE).
