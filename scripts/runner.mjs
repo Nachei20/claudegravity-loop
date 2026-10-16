@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Claudegravity Loop Runner — Hardened v1.3.0
+ * Claudegravity Loop Runner — Hardened v1.4.0
  * Standard-library zero-dependency CLI adapter for automating cross-model review rounds.
  * Node.js 18+ (Windows, macOS, Linux).
  */
@@ -16,10 +16,10 @@ import process from 'node:process';
 const __dirname = import.meta.dirname ?? dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
-let PKG_VERSION = '1.3.0';
+let PKG_VERSION = '1.4.0';
 try {
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'));
-  PKG_VERSION = pkg.version || '1.3.0';
+  PKG_VERSION = pkg.version || '1.4.0';
 } catch {
   PKG_VERSION = 'unknown';
 }
@@ -35,6 +35,17 @@ export const FALLBACK_SIGNALS = [
   /ETIMEDOUT|ECONNRESET/i,
   /UND_ERR_CONNECT_TIMEOUT/i
 ];
+
+// How agy and Claude Code reject an unknown model id (verified live, 2026-09). If the wording changes,
+// the runner falls back to the generic bridge error (exit 5), as before 1.4.0.
+const INVALID_MODEL_SIGNATURES = [
+  /invalid model selection/i,
+  /\[claude-code:unrecognized_model\]/,
+];
+
+export function isInvalidModelError(output) {
+  return typeof output === 'string' && INVALID_MODEL_SIGNATURES.some((pattern) => pattern.test(output));
+}
 
 export function pickExecutable(lines, platform = process.platform) {
   if (!Array.isArray(lines) || lines.length === 0) return null;
@@ -214,6 +225,11 @@ export function parseArgs(args) {
 
   let hasHelp = false;
   let hasVersion = false;
+  const fail = (message) => {
+    console.error(`❌ Error: ${message}`);
+    printUsage();
+    process.exit(1);
+  };
 
   for (let i = 1; i < args.length; i++) {
     const arg = args[i];
@@ -227,14 +243,13 @@ export function parseArgs(args) {
       continue;
     }
 
-    if (arg.startsWith('--plan=')) options.plan = arg.slice(7);
-    else if (arg === '--plan') {
-      if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
-        console.error(`❌ Error: Flag '--plan' requires a file path argument.`);
-        printUsage();
-        process.exit(1);
+    if (arg === '--plan' || arg.startsWith('--plan=')) {
+      const inline = arg.startsWith('--plan=');
+      if (!inline && (i + 1 >= args.length || args[i + 1].startsWith('-'))) {
+        fail(`Flag '--plan' requires a file path argument.`);
       }
-      options.plan = args[++i];
+      options.plan = inline ? arg.slice(7) : args[++i];
+      if (!options.plan.trim()) fail(`Flag '--plan' requires a non-empty file path.`);
     }
     else if (arg.startsWith('--log=')) options.log = arg.slice(6);
     else if (arg === '--log') {
@@ -256,14 +271,17 @@ export function parseArgs(args) {
       }
       console.warn('⚠️ Warning: --rounds is deprecated and ignored (one round per CLI invocation to allow host arbitration in PLAN-REVIEW-LOG.md).');
     }
-    else if (arg.startsWith('--host=')) options.host = arg.slice(7);
-    else if (arg === '--host') {
-      if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
-        console.error(`❌ Error: Flag '--host' requires a provider argument ('claude' or 'antigravity').`);
-        printUsage();
-        process.exit(1);
+    else if (arg === '--host' || arg.startsWith('--host=')) {
+      const inline = arg.startsWith('--host=');
+      if (!inline && (i + 1 >= args.length || args[i + 1].startsWith('-'))) {
+        fail(`Flag '--host' requires a provider argument ('claude' or 'antigravity').`);
       }
-      options.host = args[++i];
+      const host = inline ? arg.slice(7) : args[++i];
+      // A typo must not silently swap the roles: the reviewer is always the other model.
+      if (!['claude', 'antigravity'].includes(host.toLowerCase())) {
+        fail(`Flag '--host' must be 'claude' or 'antigravity' (got '${host}').`);
+      }
+      options.host = host.toLowerCase();
     }
     else if (arg.startsWith('--model=')) options.model = arg.slice(8);
     else if (arg === '--model') {
@@ -286,27 +304,27 @@ export function parseArgs(args) {
     else if (arg === '--auto-fallback') options.autoFallback = true;
     else if (arg === '--fallback-on-timeout') options.fallbackOnTimeout = true;
     else if (arg === '--insecure-tls') options.insecureTls = true;
-    else if (arg.startsWith('--track=')) options.track = arg.slice(8);
-    else if (arg === '--track') {
-      if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
-        console.error(`❌ Error: Flag '--track' requires an argument ('code', 'artifact', or 'auto').`);
-        printUsage();
-        process.exit(1);
+    else if (arg === '--track' || arg.startsWith('--track=')) {
+      const inline = arg.startsWith('--track=');
+      if (!inline && (i + 1 >= args.length || args[i + 1].startsWith('-'))) {
+        fail(`Flag '--track' requires an argument ('code', 'artifact', or 'auto').`);
       }
-      options.track = args[++i];
-    }
-    else if (arg.startsWith('--timeout=')) {
-      const t = parseInt(arg.slice(10), 10);
-      options.timeout = isNaN(t) ? 600000 : t;
-    }
-    else if (arg === '--timeout') {
-      if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
-        console.error(`❌ Error: Flag '--timeout' requires a numeric millisecond argument.`);
-        printUsage();
-        process.exit(1);
+      const track = inline ? arg.slice(8) : args[++i];
+      if (!['code', 'artifact', 'auto'].includes(track.toLowerCase())) {
+        fail(`Flag '--track' must be 'code', 'artifact', or 'auto' (got '${track}').`);
       }
-      const t = parseInt(args[++i], 10);
-      options.timeout = isNaN(t) ? 600000 : t;
+      options.track = track.toLowerCase();
+    }
+    else if (arg === '--timeout' || arg.startsWith('--timeout=')) {
+      const inline = arg.startsWith('--timeout=');
+      if (!inline && (i + 1 >= args.length || args[i + 1].startsWith('-'))) {
+        fail(`Flag '--timeout' requires a numeric millisecond argument.`);
+      }
+      const raw = inline ? arg.slice(10) : args[++i];
+      if (!/^[1-9]\d*$/.test(raw)) {
+        fail(`Flag '--timeout' requires a positive integer in milliseconds (got '${raw}').`);
+      }
+      options.timeout = Number(raw);
     }
     else if (arg === '--validate-models') options.validateModels = true;
     else if (arg === '--raw-output-dir' || arg.startsWith('--raw-output-dir=')) {
@@ -345,13 +363,6 @@ export function parseArgs(args) {
   if (hasVersion) {
     console.log(`claudegravity-loop v${PKG_VERSION}`);
     process.exit(0);
-  }
-
-  // Normalize and validate host
-  options.host = (options.host || 'claude').toLowerCase();
-  if (options.host !== 'claude' && options.host !== 'antigravity') {
-    console.warn(`⚠️ Unrecognized host '${options.host}'. Defaulting to 'claude'.`);
-    options.host = 'claude';
   }
 
   return options;
@@ -1244,6 +1255,13 @@ ${planContent}
   } else if (parsed.verdict === 'TIMEOUT') {
     console.error('⏱️ EXECUTION TIMEOUT — Reviewer exceeded time limit.');
     process.exit(124);
+  } else if (res.status !== 0 && isInvalidModelError(finalOutput)) {
+    // Only on a failed run: a successful review may quote the signature in its findings.
+    const hint = reviewer === 'antigravity'
+      ? "Check the id with 'agy models' or rerun with --validate-models."
+      : 'Check the --model / --fallback-model name.';
+    console.error(`❌ Error: The ${reviewer} reviewer rejected model '${usedModel}' as unknown (CONFIG / ARGS ERROR). ${hint}`);
+    process.exit(1);
   } else {
     console.warn(`⚠️ Reviewer invocation failed or emitted no valid VERDICT tag (bridge code ${parsed.code}).`);
     process.exit(parsed.code || 5);
